@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "financas", "runtimeExecutable": "./run.sh", "runtimeArgs": ["--reload"], "port": 8000 }
+  ]
+}
