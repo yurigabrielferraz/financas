@@ -1,4 +1,4 @@
-import { api } from './api.js';
+import { api, apiFetch, downloadBackup } from './api.js';
 import {
   fmtMoney, parseMoney, centsToInput, todayISO, currentMonth, shiftMonth, monthLabel, monthShort,
   fmtDate, fmtDateFull, fmtDayHeader, daysUntil, dueLabel, esc, toast, storage, store,
@@ -1001,7 +1001,7 @@ async function Settings() {
           <h2>Dados</h2>
           <p class="muted small">Baixe uma cópia de segurança de tudo (lançamentos, contas, cartões e configurações) ou restaure uma cópia baixada antes.</p>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <a class="btn" href="/api/backup" download>Baixar backup</a>
+            <button class="btn" data-backup>Baixar backup</button>
             <button class="btn" id="restore-btn">Importar backup</button>
             <input type="file" id="restore-file" accept=".db,.sqlite,.sqlite3,application/octet-stream" hidden>
             <button class="btn danger" id="reset-all">Zerar todos os dados</button>
@@ -1026,7 +1026,7 @@ async function Settings() {
     submitLabel: 'Apagar tudo',
     body: `<p>Isso apaga <b>todos</b> os lançamentos, contas fixas, cartões, faturas, contas e categorias.
         As categorias e a conta padrão são recriadas; as configurações de lembretes são mantidas.</p>
-      <p class="muted small">Não dá para desfazer. Se quiser, <a href="/api/backup" download>baixe um backup</a> antes.</p>
+      <p class="muted small">Não dá para desfazer. Se quiser, <a href="#" data-backup>baixe um backup</a> antes.</p>
       <label class="field"><span>Digite <b>APAGAR</b> para confirmar</span><input name="confirm" autocomplete="off" autofocus></label>`,
     onOpen(form) {
       const btn = $('[type=submit]', form);
@@ -1095,7 +1095,7 @@ function restoreDialog(file) {
         <code>backend/data/backups/</code> antes da importação.</p>`,
     onOpen(form) { $('[type=submit]', form).classList.replace('primary', 'danger'); },
     async onSubmit() {
-      const res = await fetch('/api/restore', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+      const res = await apiFetch('/restore', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || `Erro ${res.status}`);
       state.invoiceMonth = {};
@@ -1150,6 +1150,12 @@ function browserNotify() {
   });
   store(key, [...done, ...fresh.map(r => String(r.id))]);
 }
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('[data-backup]')) return;
+  e.preventDefault();
+  downloadBackup().catch(err => toast(err.message, 'error'));
+});
 
 $('#bell').onclick = e => {
   e.stopPropagation();

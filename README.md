@@ -26,6 +26,24 @@ e acesse `http://IP-DO-COMPUTADOR:8000`. No Chrome do Android dá pra usar "Adic
 
 Variáveis de ambiente: `FINANCAS_DB` (caminho do banco), `HOST`, `PORT`, `FINANCAS_DISABLE_NOTIFIER=1`.
 
+## Servidor na nuvem (Google Cloud, custo zero)
+
+1. Crie uma VM **e2-micro**, Debian 12, em `us-central1`, `us-west1` ou `us-east1` (free tier), disco padrão de 30 GB,
+   marcando "Permitir tráfego HTTP/HTTPS".
+2. Crie um subdomínio grátis em <https://www.duckdns.org>.
+3. Na VM (SSH pelo console): copie `deploy/setup.sh` e rode `sudo bash setup.sh`. O script instala tudo
+   (Caddy com HTTPS, serviço systemd, backup diário, DuckDNS), pede para cadastrar uma *deploy key* no GitHub
+   e mostra o **token de acesso** uma única vez.
+4. Abra `https://SEU-SUBDOMINIO.duckdns.org`, cole o token e importe seu backup em Ajustes → Dados.
+
+Atualizar a VM depois de um `git push`:
+
+```bash
+sudo -H -u financas git -C /opt/financas pull && sudo systemctl restart financas
+```
+
+Com `FINANCAS_TOKEN` definido, toda a API exige `Authorization: Bearer <token>` (a página web pede o token uma vez).
+
 ## Testes
 
 ```bash
@@ -69,6 +87,7 @@ Valores monetários trafegam e são armazenados em **centavos** (inteiros). Data
 | POST/DELETE | `/api/cards/{id}/invoice/{month}/pay` | Paga / desfaz pagamento da fatura |
 | GET/POST/PUT/DELETE | `/api/accounts`, `/api/categories` | Cadastros |
 | GET | `/api/reminders` | Contas vencidas / a vencer |
+| GET | `/api/upcoming?days=60` | Contas não pagas até N dias, com `remind_on` (para notificações do app) |
 | GET/PUT | `/api/settings` | Configurações |
 | GET | `/api/daily?start=AAAA-MM&months=12` | Grade de saldos dia a dia |
 | GET | `/api/backup` | Baixa uma cópia do banco |

@@ -318,19 +318,28 @@ def summary(conn: sqlite3.Connection, month: str, today: date) -> dict:
 # ---------------------------------------------------------------- lembretes
 
 
-def compute_reminders(conn: sqlite3.Connection, today: date) -> list[dict]:
+def compute_reminders(conn: sqlite3.Connection, today: date, horizon_days: int | None = None) -> list[dict]:
+    """Contas não pagas a lembrar. Sem `horizon_days`: só as que já entraram na janela de lembrete.
+    Com `horizon_days`: todas que vencem até lá (para o app agendar notificações)."""
     settings = db.get_settings(conn)
     default_days = int(settings["reminder_days_default"])
     cur = ym(today)
-    for m in (shift_ym(cur, -1), cur, shift_ym(cur, 1)):
+    last = ym(today + timedelta(days=max(horizon_days or 0, 31)))
+    months = [shift_ym(cur, -2), shift_ym(cur, -1)]
+    while months[-1] < last:
+        months.append(shift_ym(months[-1], 1))
+    for m in months[1:]:
         ensure_month(conn, m)
+
+    def include(days: int, window: int) -> bool:
+        return days <= (window if horizon_days is None else horizon_days)
 
     items: list[dict] = []
 
     def status(days: int) -> str:
         return "overdue" if days < 0 else "today" if days == 0 else "upcoming"
 
-    horizon = (today + timedelta(days=62)).isoformat()
+    horizon = (today + timedelta(days=max(horizon_days or 0, 62))).isoformat()
     for r in conn.execute(
         """SELECT t.id, t.description, t.amount, t.date, t.reminder_days,
                   r.reminder_days AS rec_days, r.bill_type, c.name AS category_name
@@ -343,7 +352,7 @@ def compute_reminders(conn: sqlite3.Connection, today: date) -> list[dict]:
         due = date.fromisoformat(r["date"])
         days = (due - today).days
         window = next(v for v in (r["reminder_days"], r["rec_days"], default_days) if v is not None)
-        if days <= window:
+        if include(days, window):
             items.append({
                 "type": "transaction",
                 "id": r["id"],
@@ -354,16 +363,19 @@ def compute_reminders(conn: sqlite3.Connection, today: date) -> list[dict]:
                 "status": status(days),
                 "bill_type": r["bill_type"],
                 "category_name": r["category_name"],
+                "remind_days": window,
+                "remind_on": (due - timedelta(days=window)).isoformat(),
             })
 
     for card in conn.execute("SELECT * FROM cards WHERE archived = 0").fetchall():
         window = card["reminder_days"] if card["reminder_days"] is not None else default_days
-        for m in (shift_ym(cur, -2), shift_ym(cur, -1), cur, shift_ym(cur, 1)):
+        for m in months:
             inv = card_invoice_summary(conn, card, m, today)
             if inv["paid"] or inv["total"] <= 0:
                 continue
-            days = (date.fromisoformat(inv["due_date"]) - today).days
-            if days <= window:
+            due = date.fromisoformat(inv["due_date"])
+            days = (due - today).days
+            if include(days, window):
                 items.append({
                     "type": "invoice",
                     "id": f"{card['id']}:{m}",
@@ -374,6 +386,8 @@ def compute_reminders(conn: sqlite3.Connection, today: date) -> list[dict]:
                     "due_date": inv["due_date"],
                     "days_until": days,
                     "status": status(days),
+                    "remind_days": window,
+                    "remind_on": (due - timedelta(days=window)).isoformat(),
                 })
 
     items.sort(key=lambda i: (i["due_date"], i["description"]))

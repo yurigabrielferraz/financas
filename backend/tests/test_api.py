@@ -253,3 +253,21 @@ def test_restore_rejects_invalid(client, tmp_path):
     r = client.post("/api/restore", content=other.read_bytes())
     assert r.status_code == 400 and "backup deste app" in r.json()["detail"]
     assert len(client.get("/api/accounts").json()) == 1  # nada foi alterado
+
+
+def test_token_auth(client, monkeypatch):
+    monkeypatch.setenv("FINANCAS_TOKEN", "segredo")
+    assert client.get("/api/accounts").status_code == 401
+    assert client.get("/api/accounts", headers={"Authorization": "Bearer errado"}).status_code == 401
+    assert client.get("/api/accounts", headers={"Authorization": "Bearer segredo"}).status_code == 200
+    assert client.get("/").status_code == 200  # interface web continua pública
+
+
+def test_upcoming(client):
+    client.post("/api/recurrences", json={
+        "description": "Aluguel", "amount": 100000, "day": 20, "start_date": "2026-10-01", "reminder_days": 5})
+    # fora da janela de lembrete (vence em 15 dias), mas dentro do horizonte de 60 dias
+    assert client.get("/api/reminders").json() == []
+    up = client.get("/api/upcoming?days=60").json()
+    assert [(u["due_date"], u["remind_on"], u["remind_days"]) for u in up] == [
+        ("2026-10-20", "2026-10-15", 5), ("2026-11-23", "2026-11-18", 5)]  # 20/11 é feriado

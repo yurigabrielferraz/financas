@@ -3,6 +3,7 @@
 Todos os valores monetários trafegam em CENTAVOS (inteiros). Datas em ISO (AAAA-MM-DD),
 meses em AAAA-MM. Documentação interativa em /docs.
 """
+import hmac
 import os
 import sqlite3
 import tempfile
@@ -15,6 +16,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -34,7 +36,20 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Finanças Pessoais API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-api = APIRouter(prefix="/api")
+bearer = HTTPBearer(auto_error=False)
+
+
+def require_token(cred: Optional[HTTPAuthorizationCredentials] = Depends(bearer)):
+    """Com FINANCAS_TOKEN definido, toda a API exige `Authorization: Bearer <token>`.
+    Sem a variável (uso local), a API fica aberta."""
+    expected = os.environ.get("FINANCAS_TOKEN")
+    if not expected:
+        return
+    if cred is None or not hmac.compare_digest(cred.credentials.encode(), expected.encode()):
+        raise HTTPException(401, "Token de acesso inválido ou ausente", headers={"WWW-Authenticate": "Bearer"})
+
+
+api = APIRouter(prefix="/api", dependencies=[Depends(require_token)])
 
 
 @app.middleware("http")
@@ -636,6 +651,15 @@ def get_daily(start: Optional[str] = None, months: int = Query(12, ge=1, le=24),
     result = logic.daily_grid(conn, valid_month(start), months)
     conn.commit()
     return result
+
+
+@api.get("/upcoming", tags=["lembretes"])
+def get_upcoming(days: int = Query(60, ge=1, le=120), conn=Conn):
+    """Contas não pagas (vencidas ou que vencem nos próximos `days` dias), com a antecedência
+    de lembrete de cada uma (`remind_days` / `remind_on`). Usado pelo app para agendar notificações locais."""
+    items = logic.compute_reminders(conn, today(), horizon_days=days)
+    conn.commit()
+    return items
 
 
 @api.get("/reminders", tags=["lembretes"])
