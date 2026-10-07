@@ -26,7 +26,44 @@ e acesse `http://IP-DO-COMPUTADOR:8000`. No Chrome do Android dá pra usar "Adic
 
 Variáveis de ambiente: `FINANCAS_DB` (caminho do banco), `HOST`, `PORT`, `FINANCAS_DISABLE_NOTIFIER=1`.
 
-## Servidor na nuvem (Google Cloud, custo zero)
+## Dados no Google Drive (web + app Android)
+
+O banco é **um arquivo só** (`financas.db`) numa pasta do Google Drive, usado pelos dois:
+
+- **Mac/web:** o app *Google Drive para computador* sincroniza a pasta. O `run.sh` encontra sozinho
+  `~/Library/CloudStorage/GoogleDrive-*/<Meu Drive>/Financas/financas.db` (ou use `FINANCAS_DB=...`).
+- **Android:** o app abre o mesmo arquivo pelo seletor de arquivos do sistema (Drive), trabalha numa cópia
+  local e grava de volta a cada alteração; ao abrir, baixa a versão mais nova.
+
+Configuração:
+
+1. Instale o Drive para computador (`brew install --cask google-drive`), entre na conta e marque a pasta
+   `Meu Drive/Financas` como **Disponível off-line**.
+2. Com o servidor parado, mova o banco: `mv backend/data/financas.db "<pasta do Drive>/Financas/"`.
+3. No celular: instale o APK e toque em **Abrir arquivo do Drive** → `Financas/financas.db`.
+
+Limite: é "último a gravar vence". Se editar no Mac e no celular antes do Drive sincronizar, o app detecta
+e pergunta qual versão manter (não mescla). Na prática: um aparelho por vez.
+
+## App Android (`android/`)
+
+Kotlin + Jetpack Compose + Material 3, sem servidor. As regras de `backend/app/logic.py` estão portadas em
+`android/app/src/main/java/app/financas/data/` (mesmo SQL; `schema.sql`/`seed.sql` são compartilhados).
+Mudou uma regra no Python? Mude também no Kotlin e rode os testes dos dois lados.
+
+```bash
+cd android
+./gradlew testDebugUnitTest      # regras (JVM, sqlite-jdbc)
+./gradlew assembleRelease        # APK em app/build/outputs/apk/release/app-release.apk
+```
+
+Requer JDK 17 (`brew install openjdk@17`) e Android SDK (`brew install --cask android-commandlinetools`),
+com `JAVA_HOME` e `ANDROID_HOME` apontando para eles (ou `local.properties` com `sdk.dir`).
+
+Lembretes: verificação diária local (WorkManager) no horário configurado em Ajustes, com botão
+"Marcar como paga" na notificação.
+
+## Servidor na nuvem (Google Cloud, custo zero) — opcional, não usado no momento
 
 1. Crie uma VM **e2-micro**, Debian 12, em `us-central1`, `us-west1` ou `us-east1` (free tier), disco padrão de 30 GB,
    marcando "Permitir tráfego HTTP/HTTPS".

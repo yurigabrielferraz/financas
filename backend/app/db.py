@@ -23,108 +23,9 @@ SCHEMA_VERSION = 3
 # Em receitas, nature = saving significa resgate de economia.
 NATURES = ("bill", "daily", "saving")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS settings (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS accounts (
-    id              INTEGER PRIMARY KEY,
-    name            TEXT NOT NULL,
-    type            TEXT NOT NULL DEFAULT 'checking',
-    initial_balance INTEGER NOT NULL DEFAULT 0,
-    color           TEXT NOT NULL DEFAULT '#4f46e5',
-    archived        INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS categories (
-    id       INTEGER PRIMARY KEY,
-    name     TEXT NOT NULL,
-    kind     TEXT NOT NULL CHECK (kind IN ('expense', 'income')),
-    color    TEXT NOT NULL DEFAULT '#64748b',
-    icon     TEXT NOT NULL DEFAULT '',
-    archived INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS cards (
-    id            INTEGER PRIMARY KEY,
-    name          TEXT NOT NULL,
-    credit_limit  INTEGER NOT NULL DEFAULT 0,
-    closing_day   INTEGER NOT NULL CHECK (closing_day BETWEEN 1 AND 31),
-    due_day       INTEGER NOT NULL CHECK (due_day BETWEEN 1 AND 31),
-    color         TEXT NOT NULL DEFAULT '#0ea5e9',
-    account_id    INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
-    reminder_days INTEGER,
-    archived      INTEGER NOT NULL DEFAULT 0
-);
-
--- Contas fixas / recorrentes (aluguel, internet, assinaturas, boletos, salário...)
-CREATE TABLE IF NOT EXISTS recurrences (
-    id            INTEGER PRIMARY KEY,
-    description   TEXT NOT NULL,
-    kind          TEXT NOT NULL DEFAULT 'expense' CHECK (kind IN ('expense', 'income')),
-    bill_type     TEXT NOT NULL DEFAULT 'fixa',
-    amount        INTEGER NOT NULL CHECK (amount >= 0),
-    category_id   INTEGER REFERENCES categories(id) ON DELETE SET NULL,
-    account_id    INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
-    card_id       INTEGER REFERENCES cards(id) ON DELETE SET NULL,
-    frequency     TEXT NOT NULL DEFAULT 'monthly' CHECK (frequency IN ('weekly', 'monthly', 'yearly')),
-    day           INTEGER CHECK (day BETWEEN 1 AND 31),
-    start_date    TEXT NOT NULL,
-    end_date      TEXT,
-    reminder_days INTEGER,
-    active        INTEGER NOT NULL DEFAULT 1,
-    notes         TEXT,
-    nature        TEXT
-);
-
--- Ocorrências de recorrências que o usuário excluiu (para não serem recriadas)
-CREATE TABLE IF NOT EXISTS recurrence_skips (
-    recurrence_id INTEGER NOT NULL REFERENCES recurrences(id) ON DELETE CASCADE,
-    date          TEXT NOT NULL,
-    PRIMARY KEY (recurrence_id, date)
-);
-
-CREATE TABLE IF NOT EXISTS transactions (
-    id                INTEGER PRIMARY KEY,
-    kind              TEXT NOT NULL CHECK (kind IN ('expense', 'income')),
-    description       TEXT NOT NULL,
-    amount            INTEGER NOT NULL CHECK (amount >= 0),
-    date              TEXT NOT NULL,          -- data da compra / vencimento
-    category_id       INTEGER REFERENCES categories(id) ON DELETE SET NULL,
-    account_id        INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
-    card_id           INTEGER REFERENCES cards(id) ON DELETE SET NULL,
-    invoice_month     TEXT,                   -- mês de vencimento da fatura (se cartão)
-    paid              INTEGER NOT NULL DEFAULT 0,
-    paid_date         TEXT,
-    recurrence_id     INTEGER REFERENCES recurrences(id) ON DELETE SET NULL,
-    recurrence_date   TEXT,                   -- data original agendada pela recorrência
-    installment_group TEXT,
-    installment_no    INTEGER,
-    installment_total INTEGER,
-    reminder_days     INTEGER,
-    notes             TEXT,
-    nature            TEXT,
-    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_tx_recurrence
-    ON transactions (recurrence_id, recurrence_date) WHERE recurrence_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS ix_tx_date ON transactions (date);
-CREATE INDEX IF NOT EXISTS ix_tx_invoice ON transactions (card_id, invoice_month);
-CREATE INDEX IF NOT EXISTS ix_tx_group ON transactions (installment_group);
-
-CREATE TABLE IF NOT EXISTS invoice_payments (
-    id         INTEGER PRIMARY KEY,
-    card_id    INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
-    month      TEXT NOT NULL,
-    amount     INTEGER NOT NULL,
-    paid_date  TEXT NOT NULL,
-    account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
-    UNIQUE (card_id, month)
-);
-"""
+SQL_DIR = Path(__file__).resolve().parent / "sql"
+SCHEMA = (SQL_DIR / "schema.sql").read_text()
+SEED = (SQL_DIR / "seed.sql").read_text()
 
 DEFAULT_SETTINGS = {
     "reminder_days_default": 3,
@@ -135,24 +36,6 @@ DEFAULT_SETTINGS = {
     "ntfy_last_sent": "",
 }
 
-DEFAULT_CATEGORIES = [
-    ("Moradia", "expense", "#6366f1"),
-    ("Contas de consumo", "expense", "#0ea5e9"),
-    ("Mercado", "expense", "#22c55e"),
-    ("Alimentação", "expense", "#f97316"),
-    ("Transporte", "expense", "#eab308"),
-    ("Saúde", "expense", "#ef4444"),
-    ("Educação", "expense", "#8b5cf6"),
-    ("Lazer", "expense", "#ec4899"),
-    ("Assinaturas", "expense", "#14b8a6"),
-    ("Compras", "expense", "#f43f5e"),
-    ("Impostos e taxas", "expense", "#78716c"),
-    ("Outros", "expense", "#64748b"),
-    ("Salário", "income", "#16a34a"),
-    ("Freelance", "income", "#0891b2"),
-    ("Investimentos", "income", "#7c3aed"),
-    ("Outras receitas", "income", "#64748b"),
-]
 
 
 def connect() -> sqlite3.Connection:
@@ -160,7 +43,9 @@ def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
+    # arquivo único (sem -wal/-shm): o banco pode ficar numa pasta sincronizada (Google Drive)
+    # e ser aberto também pelo app Android
+    conn.execute("PRAGMA journal_mode = DELETE")
     return conn
 
 
@@ -198,13 +83,7 @@ def _migrate(conn: sqlite3.Connection, version: int) -> None:
 
 
 def seed(conn: sqlite3.Connection) -> None:
-    if not conn.execute("SELECT 1 FROM categories LIMIT 1").fetchone():
-        conn.executemany(
-            "INSERT INTO categories (name, kind, color) VALUES (?, ?, ?)",
-            DEFAULT_CATEGORIES,
-        )
-    if not conn.execute("SELECT 1 FROM accounts LIMIT 1").fetchone():
-        conn.execute("INSERT INTO accounts (name, type) VALUES ('Conta principal', 'checking')")
+    conn.executescript(SEED)
 
 
 DATA_TABLES = ("transactions", "recurrence_skips", "recurrences", "invoice_payments", "cards", "categories", "accounts")

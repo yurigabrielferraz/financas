@@ -217,7 +217,7 @@ def test_reset_and_backup(client):
     assert client.get("/api/cards").json() == []
     assert client.get("/api/transactions?month=2026-10").json() == []
     assert len(client.get("/api/accounts").json()) == 1
-    assert len(client.get("/api/categories").json()) == len(db.DEFAULT_CATEGORIES)
+    assert len(client.get("/api/categories").json()) == 16
     assert client.get("/api/settings").json()["reminder_days_default"] == 7
     r = client.get("/api/backup")
     assert r.status_code == 200 and r.content.startswith(b"SQLite format 3")
