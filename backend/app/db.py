@@ -23,7 +23,7 @@ SCHEMA_VERSION = 3
 # Em receitas, nature = saving significa resgate de economia.
 NATURES = ("bill", "daily", "saving")
 
-SQL_DIR = Path(__file__).resolve().parent / "sql"
+SQL_DIR = Path(__file__).resolve().parents[2] / "frontend" / "sql"
 SCHEMA = (SQL_DIR / "schema.sql").read_text()
 SEED = (SQL_DIR / "seed.sql").read_text()
 

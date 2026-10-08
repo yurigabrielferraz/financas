@@ -1,55 +1,23 @@
-// Cliente da API REST. Todos os valores monetários são em centavos.
-// Se o servidor exigir token (FINANCAS_TOKEN), ele é pedido uma vez e guardado neste navegador.
+// Mesma interface de antes (api.get/post/put/del), mas atendida pelo "servidor" que roda no
+// navegador (core/server.js) em vez de HTTP. Valores monetários em centavos.
+import { store } from './store.js';
 
-function getToken() {
-  try { return localStorage.getItem('token') || ''; } catch { return ''; }
+function request(method, path, body) {
+  const res = store.server.handle(method, path, body);
+  if (res.status >= 400) throw new Error(typeof res.body?.detail === 'string' ? res.body.detail : `Erro ${res.status}`);
+  if (method !== 'GET') store.markDirty();
+  return Promise.resolve(res.body);
 }
 
-let asking = null;
-function askToken() {
-  asking ??= Promise.resolve().then(() => {
-    const t = prompt('Este servidor exige um token de acesso. Cole o token:');
-    if (t) { try { localStorage.setItem('token', t.trim()); } catch { /* sem storage */ } }
-    asking = null;
-    return !!t;
+export function downloadBackup() {
+  const d = new Date();
+  const name = `financas-backup-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.db`;
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([store.exportBytes()], { type: 'application/octet-stream' })), download: name,
   });
-  return asking;
-}
-
-export async function apiFetch(path, opts = {}, retry = true) {
-  const token = getToken();
-  const res = await fetch('/api' + path, {
-    ...opts,
-    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...opts.headers },
-  });
-  if (res.status === 401 && retry && await askToken()) return apiFetch(path, opts, false);
-  return res;
-}
-
-async function request(method, path, body) {
-  const res = await apiFetch(path, {
-    method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try {
-      const j = await res.json();
-      msg = typeof j.detail === 'string' ? j.detail : j.detail.map(d => `${d.loc.at(-1)}: ${d.msg}`).join('; ');
-    } catch { /* corpo não-JSON */ }
-    throw new Error(msg);
-  }
-  return res.status === 204 ? null : res.json();
-}
-
-export async function downloadBackup() {
-  const res = await apiFetch('/backup');
-  if (!res.ok) throw new Error(`Falha ao gerar backup (${res.status})`);
-  const name = /filename="?([^";]+)"?/.exec(res.headers.get('Content-Disposition') || '')?.[1] || 'financas-backup.db';
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(await res.blob()), download: name });
   a.click();
-  URL.revokeObjectURL(a.href);
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  return Promise.resolve();
 }
 
 export const api = {

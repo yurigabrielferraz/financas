@@ -1,0 +1,12 @@
+{
+  "name": "financas",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/",
+    "start": "python3 -m http.server 8000 --bind 127.0.0.1 --directory frontend"
+  },
+  "devDependencies": {
+    "sql.js": "1.12.0"
+  }
+}

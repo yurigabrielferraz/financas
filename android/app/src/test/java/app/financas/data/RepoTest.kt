@@ -51,7 +51,7 @@ class JdbcDb(url: String = "jdbc:sqlite::memory:") : Db {
 class RepoTest {
     private val today = LocalDate.of(2026, 10, 5)
     private lateinit var repo: Repo
-    private val sqlDir = File("../../backend/app/sql")
+    private val sqlDir = File("../../frontend/sql")
 
     @Before
     fun setUp() {

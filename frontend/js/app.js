@@ -1,4 +1,5 @@
-import { api, apiFetch, downloadBackup } from './api.js';
+import { api, downloadBackup } from './api.js';
+import { store as dataStore, FILE_NAME } from './store.js';
 import {
   fmtMoney, parseMoney, centsToInput, todayISO, currentMonth, shiftMonth, monthLabel, monthShort,
   fmtDate, fmtDateFull, fmtDayHeader, daysUntil, dueLabel, esc, toast, storage, store,
@@ -975,7 +976,7 @@ async function Settings() {
           <h2>Lembretes</h2>
           <form id="rem-form" class="form-grid">
             <label class="field"><span>Avisar quantos dias antes (padrão)</span><input type="number" name="reminder_days_default" min="0" max="60" value="${s.reminder_days_default}"></label>
-            <label class="field"><span>Horário do aviso diário (celular)</span><select name="notify_hour">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === s.notify_hour ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}</select></label>
+            <label class="field"><span>Horário do aviso diário</span><select name="notify_hour">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === s.notify_hour ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}</select></label>
             <p class="hint full">Cada conta fixa, cartão ou lançamento pode ter sua própria antecedência; se ficar em branco, vale este padrão.</p>
             <div class="full"><button class="btn primary" type="submit">Salvar</button></div>
           </form>
@@ -988,16 +989,6 @@ async function Settings() {
             ${notifOn ? '<button class="btn" id="notif-test">Testar</button>' : ''}</div>` : '<p class="small">Este navegador não suporta notificações.</p>'}
         </section>
         <section class="panel">
-          <h2>Notificações no celular (ntfy)</h2>
-          <p class="muted small">Enquanto o app Android não existe: instale o app gratuito <b>ntfy</b> no celular, inscreva-se em um tópico com nome difícil de adivinhar e coloque o mesmo nome aqui. Uma vez por dia, no horário acima, o servidor envia o resumo das contas.</p>
-          <form id="ntfy-form" class="form-grid">
-            <label class="field"><span>Servidor</span><input name="ntfy_server" value="${esc(s.ntfy_server)}"></label>
-            <label class="field"><span>Tópico</span><input name="ntfy_topic" value="${esc(s.ntfy_topic)}" placeholder="ex.: financas-yuri-8f3k2"></label>
-            <label class="inline full"><input type="checkbox" name="ntfy_enabled" ${s.ntfy_enabled ? 'checked' : ''}> Enviar lembretes diários</label>
-            <div class="full" style="display:flex;gap:8px"><button class="btn primary" type="submit">Salvar</button><button class="btn" type="button" id="ntfy-test">Enviar teste agora</button></div>
-          </form>
-        </section>
-        <section class="panel">
           <h2>Dados</h2>
           <p class="muted small">Baixe uma cópia de segurança de tudo (lançamentos, contas, cartões e configurações) ou restaure uma cópia baixada antes.</p>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -1008,8 +999,15 @@ async function Settings() {
           </div>
         </section>
         <section class="panel">
-          <h2>API</h2>
-          <p class="muted small">Toda a interface usa a API REST — a mesma que o app Android vai consumir. Documentação interativa: <a href="/docs" target="_blank">/docs</a></p>
+          <h2>Armazenamento</h2>
+          ${dataStore.mode === 'drive'
+            ? `<p class="small">Arquivo <b>${FILE_NAME}</b> no seu Google Drive — o mesmo em todos os aparelhos.</p>
+               <p class="muted small" id="sync-text">${syncText()}</p>`
+            : '<p class="small">Dados guardados <b>só neste navegador</b> (modo local). Para usar no celular e no PC, mude para o Google Drive.</p>'}
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            ${dataStore.mode === 'drive' ? '<button class="btn" id="sync-now">Sincronizar agora</button>' : ''}
+            <button class="btn" id="switch-storage">Trocar armazenamento</button>
+          </div>
         </section>
       </div>
     </div>`;
@@ -1055,21 +1053,17 @@ async function Settings() {
       refreshReminders();
     } catch (err) { toast(err.message, 'error'); }
   };
-  $('#ntfy-form').onsubmit = async e => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    try {
-      state.settings = await api.put('/settings', { ntfy_server: fd.get('ntfy_server').trim(), ntfy_topic: fd.get('ntfy_topic').trim(), ntfy_enabled: fd.get('ntfy_enabled') === 'on' });
-      toast('Configuração salva');
-    } catch (err) { toast(err.message, 'error'); }
-  };
-  $('#ntfy-test').onclick = async () => {
-    try {
-      const fd = new FormData($('#ntfy-form'));
-      state.settings = await api.put('/settings', { ntfy_server: fd.get('ntfy_server').trim(), ntfy_topic: fd.get('ntfy_topic').trim() });
-      const r = await api.post('/notifications/test');
-      toast(`Enviado (${r.sent} lembrete(s))`);
-    } catch (err) { toast(err.message, 'error'); }
+  $('#sync-now')?.addEventListener('click', () => syncClick());
+  $('#switch-storage').onclick = async () => {
+    const ok = await choose('Trocar armazenamento',
+      dataStore.mode === 'drive'
+        ? 'Desconectar deste Google Drive neste navegador? Os dados continuam no Drive.'
+        : 'Sair do modo local? Os dados deste navegador ficam guardados aqui; baixe um backup se quiser levá-los para o Drive.',
+      [{ label: 'Trocar', value: true }]);
+    if (!ok) return;
+    if (dataStore.dirty) await dataStore.sync();
+    dataStore.forget();
+    location.reload();
   };
   $('#notif-toggle')?.addEventListener('click', async () => {
     if (notifOn) { store('browserNotify', false); return Settings(); }
@@ -1091,16 +1085,14 @@ function restoreDialog(file) {
     body: `<p>Arquivo: <b>${esc(file.name)}</b> <span class="muted">(${size})</span></p>
       <p>Todos os dados atuais (lançamentos, contas fixas, cartões, contas, categorias e configurações) serão
         <b>substituídos</b> pelos do arquivo.</p>
-      <p class="muted small">Por segurança, uma cópia dos dados atuais é salva automaticamente em
-        <code>backend/data/backups/</code> antes da importação.</p>`,
+      <p class="muted small">${dataStore.mode === 'drive'
+        ? 'O Google Drive guarda as versões anteriores do arquivo (Drive › arquivo › Gerenciar versões).'
+        : 'Os dados atuais deste navegador ficam guardados como cópia de segurança.'}</p>`,
     onOpen(form) { $('[type=submit]', form).classList.replace('primary', 'danger'); },
     async onSubmit() {
-      const res = await apiFetch('/restore', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || `Erro ${res.status}`);
+      await dataStore.importBytes(await file.arrayBuffer());
       state.invoiceMonth = {};
-      const n = data.counts?.transactions ?? 0;
-      toast(`Backup importado: ${n} lançamento(s)`);
+      toast('Backup importado');
       refresh();
     },
   });
@@ -1193,14 +1185,102 @@ document.addEventListener('keydown', e => {
   }
 });
 
-(async function init() {
-  try {
-    await loadRefs();
-  } catch (e) {
-    view.innerHTML = `<div class="empty error">Não foi possível falar com o servidor: ${esc(e.message)}</div>`;
-    return;
+// ======================================================================= armazenamento / sincronização
+
+const SYNC_ICON = { idle: 'cloud', syncing: 'sync', ok: 'cloud_done', offline: 'cloud_off', auth: 'login', conflict: 'sync_problem' };
+function syncText() {
+  return {
+    idle: '', syncing: 'Sincronizando…', ok: 'Sincronizado com o Drive.',
+    offline: 'Sem conexão com o Drive — as alterações serão enviadas quando voltar.',
+    auth: 'Sessão do Google expirou — toque na nuvem para reconectar.', conflict: 'Conflito: escolha qual versão manter.',
+  }[dataStore.status] || '';
+}
+function syncClick() {
+  if (dataStore.status === 'auth') dataStore.reconnect().catch(e => toast(e.message, 'error'));
+  else dataStore.sync();
+}
+dataStore.onStatus = s => {
+  const btn = $('#sync');
+  btn.hidden = dataStore.mode !== 'drive';
+  $('.msym', btn).textContent = SYNC_ICON[s] || 'cloud';
+  btn.title = syncText();
+  btn.classList.toggle('warn', s === 'auth' || s === 'conflict' || s === 'offline');
+  const t = $('#sync-text');
+  if (t) t.textContent = syncText();
+  if (s === 'auth') toast('Sessão do Google expirou — toque na nuvem para reconectar', 'error');
+};
+dataStore.onReload = () => { toast('Dados atualizados a partir do Drive'); refresh(); };
+dataStore.onConflict = () => choose('Arquivo alterado em outro aparelho',
+  'O arquivo no Drive mudou enquanto havia alterações ainda não enviadas daqui. Qual versão manter?',
+  [{ label: 'A do Drive', value: 'drive' }, { label: 'A deste aparelho', value: 'here', cls: 'primary' }]).then(v => v || 'here');
+$('#sync').onclick = syncClick;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && dataStore.server && dataStore.status !== 'auth') dataStore.sync();
+});
+window.addEventListener('beforeunload', e => { if (dataStore.dirty) e.preventDefault(); });
+
+/** Telas antes do app: escolher onde guardar, conectar ao Google, criar/importar o arquivo. */
+function Onboarding(step, error = '') {
+  $('#fab').hidden = true;
+  const box = inner => {
+    view.innerHTML = `<section class="panel onboarding"><h1>Minhas Finanças</h1>${inner}
+      ${error ? `<p class="small" style="color:var(--danger)">${esc(error)}</p>` : ''}</section>`;
+  };
+  const run = async (fn, btn) => {
+    btn.disabled = true;
+    try { const r = await fn(); r === 'ready' || r === undefined ? start() : Onboarding(r); }
+    catch (e) { Onboarding(step, e.message); }
+  };
+  if (step === 'choose') {
+    box(`<p>Onde guardar seus dados?</p>
+      <p class="muted small">No <b>Google Drive</b>, o mesmo arquivo é usado no celular e no computador. Nada fica em servidor nenhum.</p>
+      <div class="stack">
+        <button class="btn primary" id="ob-drive" ${dataStore.driveConfigured ? '' : 'disabled'}><span class="msym">add_to_drive</span>Usar Google Drive</button>
+        ${dataStore.driveConfigured ? '' : '<p class="hint">Falta configurar o Client ID do Google em <code>js/config.js</code>.</p>'}
+        <button class="btn" id="ob-local">Só neste navegador (teste / offline)</button>
+      </div>`);
+    $('#ob-drive').onclick = e => run(() => dataStore.connect(), e.currentTarget);
+    $('#ob-local').onclick = e => run(async () => { dataStore.useLocal(); return dataStore.init(); }, e.currentTarget);
+  } else if (step === 'connect') {
+    box(`<p>Conecte ao Google Drive para abrir seus dados.</p>
+      <div class="stack"><button class="btn primary" id="ob-connect"><span class="msym">login</span>Conectar ao Google Drive</button>
+      <button class="btn ghost" id="ob-back">Usar outro armazenamento</button></div>`);
+    $('#ob-connect').onclick = e => run(() => dataStore.connect(), e.currentTarget);
+    $('#ob-back').onclick = () => { dataStore.forget(); location.reload(); };
+  } else if (step === 'nofile') {
+    box(`<p>Ainda não há o arquivo <b>${FILE_NAME}</b> deste app no seu Drive.</p>
+      <p class="muted small">Já tem dados da versão anterior? Na versão antiga, use Ajustes › Baixar backup e importe o arquivo .db aqui.</p>
+      <div class="stack">
+        <button class="btn primary" id="ob-new">Começar do zero</button>
+        <button class="btn" id="ob-import">Importar backup (.db)</button>
+        <input type="file" id="ob-file" accept=".db,.sqlite,.sqlite3,application/octet-stream" hidden>
+      </div>`);
+    $('#ob-new').onclick = e => run(() => dataStore.createDriveFile(), e.currentTarget);
+    $('#ob-import').onclick = () => $('#ob-file').click();
+    $('#ob-file').onchange = e => {
+      const f = e.target.files[0];
+      if (f) run(async () => dataStore.createDriveFile(await f.arrayBuffer()), $('#ob-import'));
+    };
   }
+}
+
+let started = false;
+async function start() {
+  $('#fab').hidden = false;
+  dataStore.onStatus(dataStore.status);
+  await loadRefs();
   await render();
   refreshReminders();
-  setInterval(refreshReminders, 15 * 60 * 1000);
+  if (!started) setInterval(refreshReminders, 15 * 60 * 1000);
+  started = true;
+}
+
+(async function init() {
+  view.innerHTML = '<div class="empty">Carregando…</div>';
+  try {
+    const step = await dataStore.init();
+    if (step === 'ready') await start(); else Onboarding(step);
+  } catch (e) {
+    view.innerHTML = `<div class="empty error">Não foi possível abrir os dados: ${esc(e.message)}</div>`;
+  }
 })();

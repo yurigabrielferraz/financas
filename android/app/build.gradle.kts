@@ -33,7 +33,7 @@ android {
     buildFeatures { compose = true }
 
     // schema.sql e seed.sql vêm do backend: um único formato de banco para web e app
-    sourceSets["main"].assets.srcDir("../../backend/app/sql")
+    sourceSets["main"].assets.srcDir("../../frontend/sql")
 }
 
 dependencies {

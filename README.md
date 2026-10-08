@@ -3,11 +3,51 @@
 Controle de finanças pessoais: gastos do dia a dia, contas fixas/recorrentes, boletos,
 faturas de cartão de crédito (com parcelamento) e lembretes de vencimento.
 
-- **Backend:** Python + FastAPI + SQLite (`backend/`)
-- **Frontend:** HTML/CSS/JS puro, sem build, responsivo (`frontend/`)
-- **API REST** em `/api/...`, a mesma que o futuro app Android vai consumir. Documentação interativa em <http://localhost:8000/docs>.
+**Sem servidor:** é uma página estática (HTML/CSS/JS, sem build) publicada no GitHub Pages. O banco é um
+arquivo SQLite (`minhas-financas.db`) no **seu Google Drive**; a página o baixa, roda o SQLite no próprio
+navegador ([sql.js](https://sql.js.org)) e grava de volta a cada alteração. Mesmo endereço no celular e no PC.
 
-## Rodando
+```
+frontend/
+  index.html, css/, sql/schema.sql, sql/seed.sql
+  js/app.js          telas
+  js/api.js          api.get/post/put/del -> "servidor" local
+  js/core/server.js  regras e rotas (faturas, recorrências, grade de saldos, lembretes)
+  js/core/dates.js   datas, dias úteis/feriados, vencimento de faturas
+  js/store.js        sql.js + Google Drive (login, download/upload, conflito) ou modo local (IndexedDB)
+  js/config.js       Client ID do Google
+tests/server.test.mjs
+```
+
+## Desenvolvimento
+
+```bash
+npm install
+npm test     # regras (node:test + sql.js)
+npm start    # http://localhost:8000
+```
+
+Sem Client ID configurado, use "Só neste navegador" (dados no IndexedDB) para testar.
+
+## Google Drive (configuração única)
+
+1. <https://console.cloud.google.com> → crie um projeto → **APIs e serviços › Biblioteca** → ative a **Google Drive API**.
+2. **Tela de consentimento OAuth**: tipo *Externo*, preencha nome/e-mail; em *Usuários de teste* adicione seu e-mail.
+3. **Credenciais › Criar credenciais › ID do cliente OAuth** → *Aplicativo da Web*. Em *Origens JavaScript
+   autorizadas* coloque `https://yurigabrielferraz.github.io` e `http://localhost:8000`.
+4. Copie o Client ID para `frontend/js/config.js`.
+
+Escopo usado: `drive.file` — a página só enxerga os arquivos que ela mesma criou no seu Drive.
+O login dura 1 h; depois disso, um toque em "Conectar"/na nuvem renova.
+
+Conflito: antes de enviar, a página compara o arquivo do Drive com o da última sincronização; se mudou em
+outro aparelho enquanto havia alterações aqui, pergunta qual versão manter (não mescla).
+
+## Versões anteriores (a remover)
+
+`backend/` (API Python) e `android/` (app nativo) não são mais usados; ficam até a versão web ser validada.
+
+## Backend Python (legado)
 
 ```bash
 ./run.sh
