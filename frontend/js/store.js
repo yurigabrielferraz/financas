@@ -202,7 +202,7 @@ async function requestToken() {
       resolve(r.access_token);
     };
     tokenClient.error_callback = e => reject(new Error(e.message || e.type));
-    tokenClient.requestAccessToken({ prompt: '' });
+    tokenClient.requestAccessToken({ prompt: store.mode === 'drive' ? '' : 'select_account' });
   });
 }
 
