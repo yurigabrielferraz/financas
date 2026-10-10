@@ -55,6 +55,14 @@ status (novo / já lançado / valor diferente), categoria sugerida e a conferên
 - Categoria: a última usada para esse nome no app; senão, a categoria que o Itaú informa.
 - Ignora "Pagamentos efetuados", "Compras parceladas - próximas faturas" e encargos.
 
+## Lembretes no Google Agenda
+
+Ajustes › Google Agenda › Ativar. Pede o escopo `calendar.app.created` (o app só vê a agenda que ele cria) e
+cria a agenda **Minhas Finanças**. `js/calendar.js` mantém um evento por conta a pagar e por vencimento de fatura
+(vencidos e próximos 60 dias, via `/upcoming`), às `notify_hour`h do vencimento, com lembrete na antecedência
+da conta e outro na hora. IDs fixos (`fin` + hex da chave): sincronizar de novo não duplica; pago/excluído some.
+Atualiza ao abrir o site e ~3 s depois de cada alteração. Requer a Google Calendar API ativada no projeto.
+
 ## Versões anteriores (a remover)
 
 `backend/` (API Python) e `android/` (app nativo) não são mais usados; ficam até a versão web ser validada.

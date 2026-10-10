@@ -190,7 +190,8 @@ function validToken() {
   } catch { return null; }
 }
 
-async function requestToken() {
+/** Pede um token (precisa de clique). `extra`: escopos além do Drive; os já concedidos vêm junto. */
+async function requestToken(extra = []) {
   if (!GOOGLE_CLIENT_ID) throw new Error('Google Client ID não configurado (js/config.js)');
   if (!window.google?.accounts?.oauth2) await loadScript(GIS);
   return new Promise((resolve, reject) => {
@@ -198,23 +199,39 @@ async function requestToken() {
     tokenClient.callback = r => {
       if (r.error) return reject(new Error(r.error_description || r.error));
       // ponytail: token de 1 h guardado neste navegador; depois disso, um toque em "reconectar"
-      ls.set('gtoken', JSON.stringify({ access_token: r.access_token, exp: Date.now() + r.expires_in * 1000 }));
+      ls.set('gtoken', JSON.stringify({ access_token: r.access_token, exp: Date.now() + r.expires_in * 1000, scope: r.scope || '' }));
       resolve(r.access_token);
     };
     tokenClient.error_callback = e => reject(new Error(e.message || e.type));
-    tokenClient.requestAccessToken({ prompt: store.mode === 'drive' ? '' : 'select_account' });
+    tokenClient.requestAccessToken({
+      scope: [SCOPE, ...extra].join(' '), include_granted_scopes: true,
+      prompt: store.mode === 'drive' ? '' : 'select_account',
+    });
   });
 }
 
-async function driveFetch(url, opts = {}) {
+/** O token atual inclui este escopo? */
+export function hasScope(scope) {
+  try { return validToken() != null && JSON.parse(ls.get('gtoken')).scope.split(' ').includes(scope); } catch { return false; }
+}
+
+/** Pede um escopo adicional (ex.: Google Agenda). Precisa ser chamado a partir de um clique. */
+export async function requestScope(scope) {
+  await requestToken([scope]);
+  if (!hasScope(scope)) throw new Error('Permissão não concedida no Google');
+}
+
+/** fetch autenticado nas APIs do Google. 404 -> null; outros erros lançam Error com `.status`. */
+export async function googleFetch(url, opts = {}) {
   const token = validToken();
   if (!token) throw new AuthError('Sessão do Google expirada');
   const res = await fetch(url, { ...opts, headers: { Authorization: `Bearer ${token}`, ...opts.headers } });
   if (res.status === 401) { ls.set('gtoken', null); throw new AuthError('Sessão do Google expirada'); }
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Google Drive: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw Object.assign(new Error(`Google: ${res.status} ${await res.text()}`), { status: res.status });
   return res;
 }
+const driveFetch = googleFetch;
 
 const meta = async id => (await driveFetch(`${DRIVE}/${id}?fields=id,name,md5Checksum`))?.json() ?? Promise.reject(new Error('Arquivo não encontrado no Drive'));
 

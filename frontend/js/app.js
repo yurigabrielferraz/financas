@@ -1,5 +1,6 @@
 import { api, downloadBackup } from './api.js';
-import { store as dataStore, FILE_NAME } from './store.js';
+import { store as dataStore, FILE_NAME, googleFetch, hasScope, requestScope } from './store.js';
+import { CAL_SCOPE, buildEvents, ensureCalendar, deleteCalendar, syncCalendar } from './calendar.js';
 import { parseItau } from './core/itau.js';
 import {
   fmtMoney, parseMoney, centsToInput, todayISO, currentMonth, shiftMonth, monthLabel, monthShort,
@@ -50,6 +51,39 @@ async function refresh() {
   await loadRefs();
   await render();
   refreshReminders();
+  scheduleCalendarSync();
+}
+
+// ======================================================================= Google Agenda
+
+let calTimer, calStatus = '';
+const calEnabled = () => dataStore.mode === 'drive' && !!state.settings?.gcal_enabled;
+
+/** Atualiza a agenda pouco depois de cada alteração (várias alterações seguidas viram uma só). */
+function scheduleCalendarSync(delay = 3000) {
+  if (!calEnabled()) return;
+  clearTimeout(calTimer);
+  calTimer = setTimeout(() => runCalendarSync().catch(() => {}), delay);
+}
+
+async function runCalendarSync() {
+  const setStatus = t => { calStatus = t; const el = $('#gcal-status'); if (el) el.textContent = t; };
+  if (!calEnabled()) return;
+  if (!hasScope(CAL_SCOPE)) return setStatus('Sem acesso à agenda nesta sessão — toque em "Sincronizar agora".');
+  setStatus('Atualizando a agenda…');
+  try {
+    const id = await ensureCalendar(googleFetch, state.settings.gcal_calendar_id);
+    if (id !== state.settings.gcal_calendar_id) state.settings = await api.put('/settings', { gcal_calendar_id: id });
+    const items = await api.get('/upcoming?days=60');
+    const r = await syncCalendar(googleFetch, id, buildEvents(items, state.settings.notify_hour ?? 8, location.origin + location.pathname));
+    const t = new Date();
+    setStatus(`Atualizada às ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')} · ${r.total} lembrete(s)` +
+      (r.created + r.updated + r.removed ? ` (${r.created} novo(s), ${r.updated} alterado(s), ${r.removed} removido(s))` : ''));
+    return r;
+  } catch (e) {
+    setStatus(`Falha ao atualizar a agenda: ${e.message}`);
+    throw e;
+  }
 }
 
 const NEW_CAT = '__new';
@@ -1109,6 +1143,23 @@ async function Settings() {
             <button class="btn" id="switch-storage">Trocar armazenamento</button>
           </div>
         </section>
+        <section class="panel">
+          <h2>Google Agenda</h2>
+          ${dataStore.mode !== 'drive'
+            ? '<p class="muted small">Disponível com os dados no Google Drive.</p>'
+            : s.gcal_enabled
+              ? `<p class="small">Contas a pagar e vencimentos de fatura (vencidos e próximos 60 dias) ficam como eventos na agenda
+                   <b>Minhas Finanças</b>, às ${String(s.notify_hour ?? 8).padStart(2, '0')}:00 do vencimento, com lembrete na antecedência de cada conta.
+                   Pagou ou excluiu, o evento sai.</p>
+                 <p class="muted small" id="gcal-status">${esc(calStatus)}</p>
+                 <div style="display:flex;gap:8px;flex-wrap:wrap">
+                   <button class="btn" id="gcal-sync">Sincronizar agora</button>
+                   <button class="btn danger" id="gcal-off">Desativar</button>
+                 </div>`
+              : `<p class="muted small">Receba os lembretes de vencimento no celular pelo Google Agenda, mesmo com o site fechado.
+                   O app cria uma agenda própria e só mexe nela.</p>
+                 <button class="btn primary" id="gcal-on"><span class="msym">event</span>Ativar lembretes no Google Agenda</button>`}
+        </section>
       </div>
     </div>`;
 
@@ -1151,9 +1202,43 @@ async function Settings() {
       state.settings = await api.put('/settings', { reminder_days_default: +fd.get('reminder_days_default'), notify_hour: +fd.get('notify_hour') });
       toast('Lembretes salvos');
       refreshReminders();
+      scheduleCalendarSync(500);
     } catch (err) { toast(err.message, 'error'); }
   };
   $('#sync-now')?.addEventListener('click', () => syncClick());
+  $('#gcal-on')?.addEventListener('click', async () => {
+    try {
+      await requestScope(CAL_SCOPE);
+      state.settings = await api.put('/settings', { gcal_enabled: true });
+      const r = await runCalendarSync();
+      toast(`Agenda criada com ${r.total} lembrete(s)`);
+      Settings();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+  $('#gcal-sync')?.addEventListener('click', async () => {
+    try {
+      if (!hasScope(CAL_SCOPE)) await requestScope(CAL_SCOPE);
+      await runCalendarSync();
+      toast('Agenda atualizada');
+    } catch (e) { toast(e.message, 'error'); }
+  });
+  $('#gcal-off')?.addEventListener('click', async () => {
+    const how = await choose('Desativar Google Agenda', 'Parar de atualizar a agenda "Minhas Finanças"?', [
+      { label: 'Desativar e apagar a agenda', value: 'delete', cls: 'danger' },
+      { label: 'Só desativar', value: 'keep' },
+    ]);
+    if (!how) return;
+    try {
+      if (how === 'delete') {
+        if (!hasScope(CAL_SCOPE)) await requestScope(CAL_SCOPE);
+        await deleteCalendar(googleFetch, state.settings.gcal_calendar_id);
+      }
+      state.settings = await api.put('/settings', { gcal_enabled: false, ...(how === 'delete' ? { gcal_calendar_id: '' } : {}) });
+      calStatus = '';
+      toast(how === 'delete' ? 'Agenda apagada' : 'Lembretes no Google Agenda desativados');
+      Settings();
+    } catch (e) { toast(e.message, 'error'); }
+  });
   $('#switch-storage').onclick = async () => {
     const ok = await choose('Trocar armazenamento',
       dataStore.mode === 'drive'
@@ -1451,6 +1536,7 @@ async function start() {
   await loadRefs();
   await render();
   refreshReminders();
+  scheduleCalendarSync(1000);
   if (!started) setInterval(refreshReminders, 15 * 60 * 1000);
   started = true;
 }
