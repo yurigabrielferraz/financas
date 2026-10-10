@@ -19,7 +19,9 @@ const ls = {
 
 class AuthError extends Error {}
 
-let SQL, schemaSql, seedSql, pushTimer, saveTimer, tokenClient;
+let SQL, schemaSql, seedSql, pushTimer, saveTimer, cacheTimer, tokenClient, gisPromise;
+let changes = 0; // contador de alterações (para não perder uma feita durante o envio)
+const loadGis = () => (gisPromise ??= loadScript(GIS));
 
 export const store = {
   server: null,
@@ -50,10 +52,60 @@ export const store = {
       return 'ready';
     }
     if (this.mode === 'drive') {
-      if (!validToken()) return 'connect';
-      return this.openDrive();
+      loadGis().catch(() => {}); // pré-carrega: a renovação do acesso precisa abrir a janela na hora do clique
+      // alterações feitas aqui e ainda não enviadas: abre a cópia local e envia (com checagem de conflito)
+      if ((await idb.get('drive-meta'))?.dirty && await this.openCache()) {
+        if (validToken()) { setStatus('idle'); this.sync(); } else setStatus('auth');
+        return 'ready';
+      }
+      if (validToken()) {
+        try {
+          const r = await this.openDrive();
+          if (r !== 'connect') return r;
+        } catch (e) {
+          if (!(await this.openCache())) throw e;
+          setStatus('offline');
+          return 'ready';
+        }
+      }
+      // acesso vencido (ou sem internet): abre a última cópia deste aparelho; o primeiro clique renova
+      if (await this.openCache()) { setStatus('auth'); return 'ready'; }
+      return 'connect';
     }
     return 'choose';
+  },
+
+  // ---------------------------------------------------------------- cópia local (modo Drive)
+
+  async openCache() {
+    const [bytes, meta] = await Promise.all([idb.get('drive-db'), idb.get('drive-meta')]);
+    if (!bytes || !meta || meta.fileId !== this.fileId) return false;
+    this.open(bytes);
+    this.baseMd5 = meta.baseMd5;
+    this.dirty = meta.dirty;
+    return true;
+  },
+
+  saveCache() {
+    clearTimeout(cacheTimer);
+    cacheTimer = setTimeout(() => {
+      if (!this.server || !this.fileId) return;
+      idb.set('drive-db', this.exportBytes());
+      idb.set('drive-meta', { fileId: this.fileId, baseMd5: this.baseMd5, dirty: this.dirty });
+    }, 300);
+  },
+
+  // ---------------------------------------------------------------- renovação do acesso
+
+  /** Acesso vencido ou vencendo em menos de 5 min? */
+  needsRenewal() {
+    return this.mode === 'drive' && !!this.server && (this.status === 'auth' || tokenMsLeft() < 5 * 60000);
+  },
+
+  /** Renova o acesso e sincroniza. Precisa ser chamado direto de um clique (abre e fecha uma janela do Google). */
+  async renew() {
+    await requestToken();
+    await this.sync();
   },
 
   open(bytes) {
@@ -98,7 +150,9 @@ export const store = {
       this.open(await download(f.id));
       this.fileId = f.id;
       this.baseMd5 = f.md5Checksum;
+      this.dirty = false;
       ls.set('driveFileId', f.id);
+      this.saveCache();
       setStatus('ok');
       return 'ready';
     } catch (e) {
@@ -114,6 +168,7 @@ export const store = {
     this.fileId = f.id;
     this.baseMd5 = f.md5Checksum;
     ls.set('driveFileId', f.id);
+    this.saveCache();
     setStatus('ok');
   },
 
@@ -127,6 +182,8 @@ export const store = {
       saveTimer = setTimeout(() => { idb.set('db', this.exportBytes()); this.dirty = false; }, 300);
       return;
     }
+    changes++;
+    this.saveCache(); // não perde a alteração se a aba fechar ou o acesso tiver vencido
     clearTimeout(pushTimer);
     pushTimer = setTimeout(() => this.sync(), 1500);
   },
@@ -146,24 +203,21 @@ export const store = {
         setStatus('syncing');
       }
       if (action === 'push') {
-        this.dirty = false;
+        const before = changes;
         this.baseMd5 = (await upload(this.fileId, this.exportBytes())).md5Checksum;
+        this.dirty = changes !== before; // alteração feita durante o envio: vai no próximo
+        if (this.dirty) pushTimer = setTimeout(() => this.sync(), 500);
       } else if (action === 'pull') {
         this.open(await download(this.fileId));
         this.baseMd5 = remote.md5Checksum;
         this.dirty = false;
         this.onReload();
       }
+      if (action) this.saveCache();
       setStatus('ok');
     } catch (e) {
       setStatus(e instanceof AuthError ? 'auth' : 'offline');
     }
-  },
-
-  /** Reconecta (precisa de clique) e sincroniza. */
-  async reconnect() {
-    await requestToken();
-    await this.sync();
   },
 
   /** Substitui todos os dados por um backup .db (valida antes). */
@@ -183,6 +237,10 @@ function setStatus(s) {
 
 // ------------------------------------------------------------------ Google: login e Drive REST
 
+function tokenMsLeft() {
+  try { return JSON.parse(ls.get('gtoken')).exp - Date.now(); } catch { return 0; }
+}
+
 function validToken() {
   try {
     const t = JSON.parse(ls.get('gtoken'));
@@ -193,7 +251,7 @@ function validToken() {
 /** Pede um token (precisa de clique). `extra`: escopos além do Drive; os já concedidos vêm junto. */
 async function requestToken(extra = []) {
   if (!GOOGLE_CLIENT_ID) throw new Error('Google Client ID não configurado (js/config.js)');
-  if (!window.google?.accounts?.oauth2) await loadScript(GIS);
+  if (!window.google?.accounts?.oauth2) await loadGis();
   return new Promise((resolve, reject) => {
     tokenClient ??= google.accounts.oauth2.initTokenClient({ client_id: GOOGLE_CLIENT_ID, scope: SCOPE, callback: () => {} });
     tokenClient.callback = r => {

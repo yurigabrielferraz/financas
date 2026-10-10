@@ -38,7 +38,8 @@ Sem Client ID configurado, use "Só neste navegador" (dados no IndexedDB) para t
 4. Copie o Client ID para `frontend/js/config.js`.
 
 Escopo usado: `drive.file` — a página só enxerga os arquivos que ela mesma criou no seu Drive.
-O login dura 1 h; depois disso, um toque em "Conectar"/na nuvem renova.
+O acesso do Google dura 1 h (limite do Google para apps sem servidor). Vencido, o site abre pela cópia local
+deste aparelho e o primeiro clique em qualquer lugar renova o acesso (janela do Google abre e fecha) e sincroniza.
 
 Conflito: antes de enviar, a página compara o arquivo do Drive com o da última sincronização; se mudou em
 outro aparelho enquanto havia alterações aqui, pergunta qual versão manter (não mescla).

@@ -1457,13 +1457,24 @@ function syncText() {
   return {
     idle: '', syncing: 'Sincronizando…', ok: 'Sincronizado com o Drive.',
     offline: 'Sem conexão com o Drive — as alterações serão enviadas quando voltar.',
-    auth: 'Sessão do Google expirou — toque na nuvem para reconectar.', conflict: 'Conflito: escolha qual versão manter.',
+    auth: 'Acesso do Google expirou — o próximo toque renova e sincroniza.', conflict: 'Conflito: escolha qual versão manter.',
   }[dataStore.status] || '';
 }
 function syncClick() {
-  if (dataStore.status === 'auth') dataStore.reconnect().catch(e => toast(e.message, 'error'));
-  else dataStore.sync();
+  if (dataStore.status !== 'auth') dataStore.sync(); // com acesso vencido, o clique já renova (abaixo)
 }
+
+// Acesso do Google dura 1 h: com ele vencido (ou vencendo), o primeiro clique em qualquer lugar renova.
+// O navegador só deixa abrir a janela do Google a partir de um clique; por isso não é automático.
+let renewing = false;
+document.addEventListener('click', () => {
+  if (renewing || !dataStore.needsRenewal()) return;
+  renewing = true;
+  dataStore.renew()
+    .then(() => scheduleCalendarSync(500))
+    .catch(e => toast(`Não foi possível renovar o acesso ao Google: ${e.message}`, 'error'))
+    .finally(() => { renewing = false; });
+}, true);
 dataStore.onStatus = s => {
   const btn = $('#sync');
   btn.hidden = dataStore.mode !== 'drive';
@@ -1472,7 +1483,6 @@ dataStore.onStatus = s => {
   btn.classList.toggle('warn', s === 'auth' || s === 'conflict' || s === 'offline');
   const t = $('#sync-text');
   if (t) t.textContent = syncText();
-  if (s === 'auth') toast('Sessão do Google expirou — toque na nuvem para reconectar', 'error');
 };
 dataStore.onReload = () => { toast('Dados atualizados a partir do Drive'); refresh(); };
 dataStore.onConflict = () => choose('Arquivo alterado em outro aparelho',
