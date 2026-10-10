@@ -60,8 +60,8 @@ status (novo / já lançado / valor diferente), categoria sugerida e a conferên
 
 Ajustes › Google Agenda › Ativar. Pede o escopo `calendar.app.created` (o app só vê a agenda que ele cria) e
 cria a agenda **Minhas Finanças**. `js/calendar.js` mantém um evento por conta a pagar e por vencimento de fatura
-(vencidos e próximos 60 dias, via `/upcoming`), às `notify_hour`h do vencimento, com lembrete na antecedência
-da conta e outro na hora. IDs fixos (`fin` + hex da chave): sincronizar de novo não duplica; pago/excluído some.
+(vencidos e próximos 60 dias, via `/upcoming`), como evento de dia inteiro no vencimento, com lembrete às
+`notify_hour`h N dias antes (antecedência da conta) e na véspera. IDs fixos (`fin` + hex da chave): sincronizar de novo não duplica; pago/excluído some.
 Atualiza ao abrir o site e ~3 s depois de cada alteração. Requer a Google Calendar API ativada no projeto.
 
 ## Versões anteriores (a remover)

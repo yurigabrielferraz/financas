@@ -1,7 +1,7 @@
 // Sincronização com o Google Agenda contra uma API falsa em memória.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildEvents, eventId, syncCalendar } from '../frontend/js/calendar.js';
+import { buildEvents, eventId, reminderMinutes, syncCalendar } from '../frontend/js/calendar.js';
 
 const items = [
   { type: 'transaction', id: 7, description: 'Aluguel', amount: 160000, due_date: '2026-11-05', remind_days: 3 },
@@ -34,11 +34,17 @@ test('buildEvents', () => {
   const [bill, inv] = buildEvents(items, 9, 'https://x/');
   assert.match(bill.id, /^[a-v0-9]{5,1024}$/); // formato exigido pela API
   assert.equal(bill.id, eventId('tx:7'));
-  assert.equal(bill.start.dateTime, '2026-11-05T09:00:00');
-  assert.deepEqual(bill.reminders.overrides.map(o => o.minutes), [3 * 1440, 0]);
+  assert.deepEqual([bill.start, bill.end], [{ date: '2026-11-05' }, { date: '2026-11-06' }]); // dia inteiro
+  // 3 dias antes às 9h e 1 dia antes às 9h (minutos antes da meia-noite do dia do vencimento)
+  assert.deepEqual(bill.reminders.overrides.map(o => o.minutes), [3 * 1440 - 540, 1440 - 540]);
   assert.deepEqual(inv.reminders.overrides.map(o => o.minutes), [0]);
   assert.ok(inv.summary.startsWith('💳 Fatura Itaú'));
   assert.notEqual(buildEvents([{ ...items[0], amount: 1 }], 9, '')[0].extendedProperties.private.sig, bill.extendedProperties.private.sig);
+});
+
+test('reminderMinutes', () => {
+  assert.deepEqual(reminderMinutes(1, 8), [1440 - 480]);
+  assert.deepEqual(reminderMinutes(30, 8), [40320, 960]); // limite de 4 semanas da API
 });
 
 test('sync: create, no-op, update, remove paid, restore deleted id', async () => {

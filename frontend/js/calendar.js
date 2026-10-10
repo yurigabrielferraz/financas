@@ -6,34 +6,41 @@ import { fmtMoney, fmtDateFull } from './utils.js';
 export const CAL_SCOPE = 'https://www.googleapis.com/auth/calendar.app.created';
 const CAL = 'https://www.googleapis.com/calendar/v3';
 const TZ = 'America/Sao_Paulo';
-const pad = n => String(n).padStart(2, '0');
 
 /** ID fixo por lançamento/fatura (a API aceita a-v e 0-9): sincronizar de novo não duplica. */
 export const eventId = key => 'fin' + [...new TextEncoder().encode(key)].map(b => b.toString(16).padStart(2, '0')).join('');
 
+/** Dia seguinte (AAAA-MM-DD): fim exclusivo de um evento de dia inteiro. */
+const nextDay = iso => new Date(Date.parse(`${iso}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+
 /**
- * Eventos desejados a partir de /upcoming. Evento curto às `hour`h do vencimento, com lembrete
- * N dias antes (antecedência da conta) e outro na hora.
+ * Lembretes de um evento de dia inteiro: a API conta os minutos antes da meia-noite do dia do evento.
+ * N dias antes às `hour`h e, se N > 1, também 1 dia antes às `hour`h. N = 0: à meia-noite do dia
+ * (a API não aceita "no próprio dia às Xh" para evento de dia inteiro).
  */
+export function reminderMinutes(days, hour) {
+  const at = d => Math.min(40320, d * 1440 - hour * 60); // máximo da API: 4 semanas
+  if (days <= 0) return [0];
+  return days > 1 ? [at(days), at(1)] : [at(1)];
+}
+
+/** Eventos de dia inteiro, na data do vencimento, a partir de /upcoming. */
 export function buildEvents(items, hour, siteUrl) {
   return items.map(it => {
     const invoice = it.type === 'invoice';
     const key = invoice ? `inv:${it.card_id}:${it.month}` : `tx:${it.id}`;
     const summary = `${invoice ? '💳' : '💸'} ${it.description} — ${fmtMoney(it.amount)}`;
-    const minutes = Math.min(40320, Math.max(0, it.remind_days) * 1440); // máximo da API: 4 semanas
-    const overrides = [{ method: 'popup', minutes: 0 }];
-    if (minutes > 0) overrides.unshift({ method: 'popup', minutes });
-    const at = m => ({ dateTime: `${it.due_date}T${pad(hour)}:${pad(m)}:00`, timeZone: TZ });
+    const minutes = reminderMinutes(it.remind_days, hour);
     return {
       id: eventId(key),
       summary,
       description: `${invoice ? 'Fatura do cartão' : 'Conta a pagar'}: ${fmtMoney(it.amount)}\nVencimento: ${fmtDateFull(it.due_date)}\n\n${siteUrl}`,
-      start: at(0),
-      end: at(15),
+      start: { date: it.due_date },
+      end: { date: nextDay(it.due_date) },
       transparency: 'transparent',
       colorId: invoice ? '9' : '11',
-      reminders: { useDefault: false, overrides },
-      extendedProperties: { private: { app: 'financas', sig: [summary, it.due_date, hour, minutes].join('|') } },
+      reminders: { useDefault: false, overrides: minutes.map(m => ({ method: 'popup', minutes: m })) },
+      extendedProperties: { private: { app: 'financas', sig: ['allday', summary, it.due_date, minutes.join(',')].join('|') } },
     };
   });
 }

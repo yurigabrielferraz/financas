@@ -1165,7 +1165,7 @@ async function Settings() {
             ? '<p class="muted small">Disponível com os dados no Google Drive.</p>'
             : s.gcal_enabled
               ? `<p class="small">Contas a pagar e vencimentos de fatura (vencidos e próximos 60 dias) ficam como eventos na agenda
-                   <b>Minhas Finanças</b>, às ${String(s.notify_hour ?? 8).padStart(2, '0')}:00 do vencimento, com lembrete na antecedência de cada conta.
+                   <b>Minhas Finanças</b>, como evento de dia inteiro no vencimento, com lembrete às ${String(s.notify_hour ?? 8).padStart(2, '0')}:00 na antecedência de cada conta (e na véspera).
                    Pagou ou excluiu, o evento sai.</p>
                  <p class="muted small" id="gcal-status">${esc(calStatus)}</p>
                  <div style="display:flex;gap:8px;flex-wrap:wrap">
