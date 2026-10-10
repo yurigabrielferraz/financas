@@ -21,6 +21,13 @@ const state = {
 };
 
 const BILL_TYPES = { fixa: 'Conta fixa', boleto: 'Boleto', assinatura: 'Assinatura', debito: 'Débito automático', outro: 'Outro' };
+const DUE_SHIFT = { next: 'Adia para o próximo dia útil', previous: 'Antecipa para o dia útil anterior', none: 'Mantém a data' };
+const defaultShift = kind => (kind === 'expense' ? 'next' : 'previous');
+/** "cai em 3 dias" / "caiu há 2 dias" para receitas. */
+function receiveLabel(days) {
+  if (days < 0) return `atrasado há ${-days} dia${days < -1 ? 's' : ''}`;
+  return days === 0 ? 'cai hoje' : days === 1 ? 'cai amanhã' : `cai em ${days} dias`;
+}
 const FREQ = { monthly: 'Mensal', weekly: 'Semanal', yearly: 'Anual' };
 const NATURES = {
   expense: [['daily', 'Gasto diário'], ['bill', 'Saída / conta'], ['saving', 'Economia (guardar)']],
@@ -360,10 +367,11 @@ function recurrenceForm(rec = null) {
       </div>
       <label class="field full"><span>Descrição</span><input name="description" value="${esc(r.description)}" placeholder="Ex.: Aluguel, Internet, Netflix, Salário" required autofocus></label>
       <label class="field"><span>Valor <span class="hint">(estimado, se variar)</span></span><input name="amount" inputmode="decimal" value="${centsToInput(r.amount)}" placeholder="0,00" required></label>
-      <label class="field"><span>Tipo</span><select name="bill_type">${Object.entries(BILL_TYPES).map(([k, v]) => `<option value="${k}" ${k === r.bill_type ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      <label class="field" id="f-bill"><span>Tipo</span><select name="bill_type">${Object.entries(BILL_TYPES).map(([k, v]) => `<option value="${k}" ${k === r.bill_type ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
       <label class="field"><span>Classificação</span><select name="nature">${natureOptions(r.kind, r.nature ?? (r.kind === 'expense' ? 'bill' : ''))}</select></label>
       <label class="field"><span>Frequência</span><select name="frequency">${Object.entries(FREQ).map(([k, v]) => `<option value="${k}" ${k === r.frequency ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
-      <label class="field" id="f-day"><span>Dia do vencimento</span><input type="number" name="day" min="1" max="31" value="${r.day ?? ''}"></label>
+      <label class="field" id="f-day"><span id="day-label">Dia do vencimento</span><input type="number" name="day" min="1" max="31" value="${r.day ?? ''}"></label>
+      <label class="field" id="f-shift"><span>Se cair em fim de semana ou feriado</span><select name="due_shift">${Object.entries(DUE_SHIFT).map(([k, v]) => `<option value="${k}" ${k === (r.due_shift || (isEdit ? (r.kind === 'expense' && !r.card_id ? 'next' : 'none') : defaultShift(r.kind))) ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
       <label class="field"><span>Categoria</span><select name="category_id">${categoryOptions(r.kind, r.category_id)}</select></label>
       <label class="field"><span>Conta / cartão</span><select name="source">${sourceOptions(src)}</select></label>
       <label class="field"><span>Começa em</span><input type="date" name="start_date" value="${r.start_date}" required></label>
@@ -374,12 +382,19 @@ function recurrenceForm(rec = null) {
       <p class="hint full">Os lançamentos são criados automaticamente a cada período. Ao editar, os meses futuros ainda não pagos são atualizados; o histórico pago é mantido.</p>
     </div>`,
     onOpen(form) {
-      const syncFreq = () => { $('#f-day', form).hidden = form.frequency.value === 'weekly'; };
-      form.frequency.onchange = syncFreq;
-      syncFreq();
+      const sync = () => {
+        const income = form.kind.value === 'income';
+        $('#f-day', form).hidden = form.frequency.value === 'weekly';
+        $('#f-bill', form).hidden = income;
+        $('#day-label', form).textContent = income ? 'Dia do recebimento (31 = último dia do mês)' : 'Dia do vencimento';
+      };
+      form.frequency.onchange = sync;
+      sync();
       $$('[name=kind]', form).forEach(x => x.onchange = () => {
         form.category_id.innerHTML = categoryOptions(form.kind.value, null);
         form.nature.innerHTML = natureOptions(form.kind.value, form.kind.value === 'expense' ? 'bill' : '');
+        form.due_shift.value = defaultShift(form.kind.value);
+        sync();
       });
       $('#rec-del', form)?.addEventListener('click', async () => {
         const ok = await choose('Excluir conta fixa', `Excluir “${rec.description}”? Os lançamentos futuros não pagos serão removidos; o histórico pago fica.`, [{ label: 'Excluir', value: true, cls: 'danger' }]);
@@ -401,6 +416,7 @@ function recurrenceForm(rec = null) {
         reminder_days: num(fd.get('reminder_days')), active: fd.get('active') === 'on',
         notes: fd.get('notes') || null,
         nature: fd.get('nature') || null,
+        due_shift: fd.get('due_shift'),
       };
       if (!payload.description) throw new Error('Informe uma descrição');
       if (isEdit) await api.put(`/recurrences/${rec.id}`, payload);
@@ -829,17 +845,22 @@ async function Recurrences() {
   const fixedExp = monthly('expense'), fixedInc = monthly('income');
 
   const row = r => {
-    const when = r.frequency === 'weekly' ? 'semanal' : r.frequency === 'yearly' ? `anual · dia ${r.day ?? r.start_date.slice(8)}/${r.start_date.slice(5, 7)}` : `todo dia ${r.day ?? +r.start_date.slice(8)}`;
+    const income = r.kind === 'income';
+    const day = r.day ?? +r.start_date.slice(8);
+    const dayText = day >= 31 ? 'último dia do mês' : `todo dia ${day}`;
+    const shiftText = r.due_shift === 'previous' ? ' (antecipa se não for dia útil)' : '';
+    const when = r.frequency === 'weekly' ? 'semanal' : r.frequency === 'yearly' ? `anual · dia ${day}/${r.start_date.slice(5, 7)}` : dayText + shiftText;
     const cur = r.current;
     const status = !r.active ? '<span class="tag">inativa</span>'
       : cur?.card_id ? '<span class="tag">💳 na fatura</span>'
-      : cur ? (cur.paid ? '<span class="tag pos">pago este mês</span>' : dueTag(cur.date, false))
+      : cur?.paid ? `<span class="tag pos">${income ? 'recebido' : 'pago'} este mês</span>`
+      : cur ? (income ? `<span class="tag">${receiveLabel(daysUntil(cur.date))} (${fmtDate(cur.date)})</span>` : dueTag(cur.date, false))
       : r.next_date ? `<span class="tag">próxima ${fmtDate(r.next_date)}</span>` : '';
     return `<div class="row clickable" data-rec="${r.id}" style="${r.active ? '' : 'opacity:.6'}">
       ${catIcon(r.category_name || r.description, r.category_color)}
       <div class="main-col">
         <div class="title">${esc(r.description)}</div>
-        <div class="meta"><span class="tag primary">${BILL_TYPES[r.bill_type]}</span> ${when} · ${r.card_name ? `💳 ${esc(r.card_name)}` : esc(r.account_name || 'sem conta')} ${status}</div>
+        <div class="meta"><span class="tag primary">${income ? 'Receita fixa' : BILL_TYPES[r.bill_type]}</span> ${when} · ${r.card_name ? `💳 ${esc(r.card_name)}` : esc(r.account_name || 'sem conta')} ${status}</div>
       </div>
       <div class="amount num ${r.kind === 'income' ? 'pos' : ''}">${fmtMoney(r.amount)}</div>
     </div>`;

@@ -78,6 +78,11 @@ export function nextBusinessDay(iso) {
   return iso;
 }
 
+export function previousBusinessDay(iso) {
+  while (!isBusinessDay(iso)) iso = addDays(iso, -1);
+  return iso;
+}
+
 // ------------------------------------------------------------------ cartões
 
 /** Mês em que vence a fatura de uma compra. Compras no dia do fechamento ou depois vão para a seguinte. */

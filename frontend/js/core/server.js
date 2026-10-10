@@ -2,7 +2,7 @@
 // SQLite em memória (sql.js). Valores em centavos; datas AAAA-MM-DD; meses AAAA-MM.
 import * as D from './dates.js';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 export const DATA_TABLES = ['transactions', 'recurrence_skips', 'recurrences', 'invoice_payments', 'cards', 'categories', 'accounts'];
 const DEFAULT_SETTINGS = { reminder_days_default: 3, notify_hour: 8 };
 const BOOL_FIELDS = ['paid', 'archived', 'active'];
@@ -56,9 +56,12 @@ export function upgrade(db, schemaSql, seedSql, today) {
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(schemaSql);
   if (version === 0) db.exec(seedSql);
-  for (const t of ['transactions', 'recurrences']) {
-    if (!db.all(`PRAGMA table_info(${t})`).some(c => c.name === 'nature')) db.exec(`ALTER TABLE ${t} ADD COLUMN nature TEXT`);
-  }
+  const addColumn = (t, col) => {
+    if (!db.all(`PRAGMA table_info(${t})`).some(c => c.name === col)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${col} TEXT`);
+  };
+  addColumn('transactions', 'nature'); // v2
+  addColumn('recurrences', 'nature'); // v2
+  addColumn('recurrences', 'due_shift'); // v4
   if (version > 0 && version < 3) {
     db.run(`DELETE FROM transactions WHERE recurrence_id IS NOT NULL AND paid = 0
             AND card_id IS NULL AND recurrence_date >= ?`, [today]);
@@ -143,8 +146,7 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
       for (const d of D.occurrences(rec.frequency, rec.day, rec.start_date, rec.end_date, month)) {
         if (skips.has(`${rec.id}|${d}`)) continue;
         const card = cards[rec.card_id];
-        // contas (sem cartão) que vencem em fim de semana/feriado vão para o próximo dia útil
-        const due = rec.kind === 'expense' && !card ? D.nextBusinessDay(d) : d;
+        const due = shiftedDate(rec, d, card);
         db.run(
           `INSERT OR IGNORE INTO transactions
            (kind, description, amount, date, category_id, account_id, card_id, invoice_month,
@@ -155,6 +157,12 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
         );
       }
     }
+  }
+
+  /** Data efetiva de uma ocorrência: ajusta fim de semana/feriado conforme `due_shift` da recorrência. */
+  function shiftedDate(rec, d, card) {
+    const shift = rec.due_shift || (rec.kind === 'expense' && !card ? 'next' : 'none');
+    return shift === 'next' ? D.nextBusinessDay(d) : shift === 'previous' ? D.previousBusinessDay(d) : d;
   }
 
   const clearFutureOccurrences = id => db.run(
@@ -443,7 +451,8 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
       category_id: b.category_id ?? null, account_id: b.account_id ?? null, card_id: b.card_id ?? null,
       frequency: b.frequency ?? 'monthly', day: b.day ?? null, start_date: b.start_date, end_date: b.end_date ?? null,
       reminder_days: b.reminder_days ?? null, active: b.active ?? true, notes: b.notes ?? null,
-      nature: normNature(kind, b.nature) };
+      nature: normNature(kind, b.nature),
+      due_shift: ['next', 'previous', 'none'].includes(b.due_shift) ? b.due_shift : null };
   };
   /** Normaliza campos do lançamento: cartão define a fatura e ignora conta/pago. */
   const txFields = b => {
@@ -478,7 +487,8 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
     let next = null;
     if (r.active) {
       for (let i = 0; i < 13 && !next; i++) {
-        next = D.occurrences(r.frequency, r.day, r.start_date, r.end_date, D.shiftYm(cur, i)).find(x => x >= t) ?? null;
+        next = D.occurrences(r.frequency, r.day, r.start_date, r.end_date, D.shiftYm(cur, i))
+          .map(x => shiftedDate(r, x, r.card_id)).find(x => x >= t) ?? null;
       }
     }
     return { ...toDict(r), current: toDict(occ), next_date: next };

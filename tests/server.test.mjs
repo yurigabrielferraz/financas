@@ -218,7 +218,7 @@ test('failed mutation is rolled back', () => {
   assert.deepEqual(c.get('/api/transactions?month=2026-10').json(), []);
 });
 
-test('opens a database created by the Python backend (v1 -> v3)', () => {
+test('opens a database created by the Python backend (v1 -> v4)', () => {
   const sdb = new SQL.Database();
   const db = wrap(sdb);
   db.exec(schema.replace(/,\s*nature\s+TEXT/g, '')); // formato antigo, sem a coluna nature
@@ -226,8 +226,25 @@ test('opens a database created by the Python backend (v1 -> v3)', () => {
   db.exec('PRAGMA user_version = 1');
   checkBackup(db);
   upgrade(db, schema, seed, TODAY);
-  assert.equal(db.scalar('PRAGMA user_version'), 3);
+  assert.equal(db.scalar('PRAGMA user_version'), 4);
+  assert.ok(db.all('PRAGMA table_info(recurrences)').some(c => c.name === 'due_shift'));
   assert.ok(db.all('PRAGMA table_info(transactions)').some(c => c.name === 'nature'));
   const c = makeClient(sdb);
   assert.equal(c.get('/api/categories').json().length, 16); // não duplica o seed
+});
+
+test('salary on the last day of the month, anticipated to the previous business day', () => {
+  const c = makeClient();
+  const r = c.post('/api/recurrences', { description: 'Salário', kind: 'income', amount: 630000, day: 31,
+    start_date: '2026-10-01', due_shift: 'previous' }).json();
+  assert.equal(r.due_shift, 'previous');
+  assert.equal(r.next_date, '2026-10-30'); // 31/10/2026 é sábado
+  const on = m => c.get(`/api/transactions?month=${m}`).json().find(t => t.description === 'Salário').date;
+  assert.equal(on('2026-10'), '2026-10-30');
+  assert.equal(on('2026-11'), '2026-11-30'); // segunda
+  assert.equal(on('2027-01'), '2027-01-29'); // 31/01/2027 é domingo
+  assert.equal(on('2027-02'), '2027-02-26'); // 28/02/2027 é domingo
+  // despesa pode manter a data
+  c.post('/api/recurrences', { description: 'Aluguel', amount: 1, day: 10, start_date: '2026-10-01', due_shift: 'none' });
+  assert.equal(c.get('/api/transactions?month=2026-10').json().find(t => t.description === 'Aluguel').date, '2026-10-10');
 });

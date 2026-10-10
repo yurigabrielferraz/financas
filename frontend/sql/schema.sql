@@ -52,7 +52,10 @@ CREATE TABLE IF NOT EXISTS recurrences (
     reminder_days INTEGER,
     active        INTEGER NOT NULL DEFAULT 1,
     notes         TEXT,
-    nature        TEXT
+    nature        TEXT,
+    -- vencimento em fim de semana/feriado: next (adia), previous (antecipa), none (mantém).
+    -- NULL = padrão: despesa sem cartão adia; receita e cartão mantêm.
+    due_shift     TEXT
 );
 
 -- Ocorrências de recorrências que o usuário excluiu (para não serem recriadas)
