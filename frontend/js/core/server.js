@@ -147,13 +147,22 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
         if (skips.has(`${rec.id}|${d}`)) continue;
         const card = cards[rec.card_id];
         const due = shiftedDate(rec, d, card);
+        const accountId = card ? null : rec.account_id;
+        const cardId = card ? card.id : null;
+        const invoiceMonth = card ? D.invoiceMonthFor(d, card.closing_day, card.due_day) : null;
         db.run(
           `INSERT OR IGNORE INTO transactions
            (kind, description, amount, date, category_id, account_id, card_id, invoice_month,
             recurrence_id, recurrence_date, nature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [rec.kind, rec.description, rec.amount, due, rec.category_id, card ? null : rec.account_id,
-            card ? card.id : null, card ? D.invoiceMonthFor(d, card.closing_day, card.due_day) : null,
-            rec.id, d, rec.nature],
+          [rec.kind, rec.description, rec.amount, due, rec.category_id, accountId, cardId, invoiceMonth, rec.id, d, rec.nature],
+        );
+        // ocorrência já existente e não paga, gerada antes de trocar conta <-> cartão: acompanha a recorrência
+        db.run(
+          `UPDATE transactions SET card_id = ?, account_id = ?, invoice_month = ?, date = ?
+           WHERE recurrence_id = ? AND recurrence_date = ? AND paid = 0 AND card_id IS NOT ?
+             AND (card_id IS NULL OR NOT EXISTS (SELECT 1 FROM invoice_payments ip
+                  WHERE ip.card_id = transactions.card_id AND ip.month = transactions.invoice_month))`,
+          [cardId, accountId, invoiceMonth, due, rec.id, d, cardId],
         );
       }
     }

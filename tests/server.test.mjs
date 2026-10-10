@@ -248,3 +248,17 @@ test('salary on the last day of the month, anticipated to the previous business 
   c.post('/api/recurrences', { description: 'Aluguel', amount: 1, day: 10, start_date: '2026-10-01', due_shift: 'none' });
   assert.equal(c.get('/api/transactions?month=2026-10').json().find(t => t.description === 'Aluguel').date, '2026-10-10');
 });
+
+test('recurrence switched from account to card moves this month unpaid occurrence to the card', () => {
+  const c = makeClient(); // hoje = 05/10/2026
+  const card = c.post('/api/cards', { name: 'Itaú', closing_day: 30, due_day: 6 }).json();
+  const r = c.post('/api/recurrences', { description: 'Spotify', amount: 2190, day: 2, start_date: '2026-10-01', account_id: 1 }).json();
+  c.put(`/api/recurrences/${r.id}`, { ...r, account_id: null, card_id: card.id });
+  const oct = c.get('/api/transactions?month=2026-10').json().find(t => t.description === 'Spotify');
+  assert.equal(oct.card_id, card.id);
+  assert.equal(oct.account_id, null);
+  assert.ok(c.get(`/api/cards/${card.id}/invoice?month=2026-11`).json().items.some(i => i.description === 'Spotify'));
+  // e volta para a conta, se trocar de novo
+  c.put(`/api/recurrences/${r.id}`, { ...r, account_id: 1, card_id: null });
+  assert.equal(c.get('/api/transactions?month=2026-10').json().find(t => t.description === 'Spotify').card_id, null);
+});
