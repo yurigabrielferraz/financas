@@ -16,16 +16,17 @@
   <aside class="sidebar">
     <div class="brand"><img src="icon.svg" alt=""><span>Minhas Finanças</span></div>
     <nav class="nav">
-      <a href="#/" data-route="dashboard"><span class="ico msym">space_dashboard</span><span>Resumo</span></a>
-      <a href="#/lancamentos" data-route="lancamentos"><span class="ico msym">receipt_long</span><span>Lançamentos</span></a>
-      <a href="#/fixas" data-route="fixas"><span class="ico msym">event_repeat</span><span>Contas fixas</span></a>
-      <a href="#/cartoes" data-route="cartoes"><span class="ico msym">credit_card</span><span>Cartões</span></a>
-      <a href="#/config" data-route="config"><span class="ico msym">settings</span><span>Ajustes</span></a>
+      <a href="#/" data-route="dashboard" title="Resumo"><span class="ico msym">space_dashboard</span><span>Resumo</span></a>
+      <a href="#/lancamentos" data-route="lancamentos" title="Lançamentos"><span class="ico msym">receipt_long</span><span>Lançamentos</span></a>
+      <a href="#/fixas" data-route="fixas" title="Contas fixas"><span class="ico msym">event_repeat</span><span>Contas fixas</span></a>
+      <a href="#/cartoes" data-route="cartoes" title="Cartões"><span class="ico msym">credit_card</span><span>Cartões</span></a>
+      <a href="#/config" data-route="config" title="Ajustes"><span class="ico msym">settings</span><span>Ajustes</span></a>
     </nav>
   </aside>
 
   <div class="main">
     <header class="topbar">
+      <button class="icon-btn desktop-only" id="nav-toggle" aria-label="Ocultar menu"><span class="msym">left_panel_close</span></button>
       <div class="brand mobile-only"><img src="icon.svg" alt=""><span>Minhas Finanças</span></div>
       <div class="spacer"></div>
       <button class="icon-btn" id="sync" aria-label="Sincronização" hidden><span class="msym">cloud</span></button>

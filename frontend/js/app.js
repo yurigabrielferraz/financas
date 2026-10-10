@@ -817,6 +817,10 @@ async function Grid() {
     <p class="hint">Clique em qualquer célula para ver ou adicionar lançamentos naquele dia. O saldo é projetado: considera tudo o que está lançado na data, pago ou não, e cada fatura no dia do vencimento.</p>`;
 
   const sc = $('.grid-scroll');
+  fitGrid(sc);
+  gridObserver?.disconnect();
+  gridObserver = new ResizeObserver(() => fitGrid(sc));
+  gridObserver.observe(sc);
   if (keepScroll) [sc.scrollLeft, sc.scrollTop] = keepScroll;
   $$('[data-gshift]').forEach(b => b.onclick = () => { state.gridStart = shiftMonth(state.gridStart, +b.dataset.gshift); render(); });
   $('#g-today').onclick = () => {
@@ -826,6 +830,18 @@ async function Grid() {
   $('#g-past').onchange = e => { state.showPast = e.target.checked; store('showPast', state.showPast); render(); };
   bindViewToggle();
   $$('[data-cell]', sc).forEach(td => td.onclick = () => openCell(td.dataset.cell, td.dataset.date));
+}
+
+/** Quantos meses cabem inteiros na largura disponível; cada um estica para preencher a tela. */
+let gridObserver;
+function fitGrid(sc) {
+  const first = $('.gm', sc);
+  if (!first || !sc.isConnected) return;
+  const GAP = 16;
+  sc.style.removeProperty('--gm-w');
+  const natural = first.getBoundingClientRect().width; // largura mínima do conteúdo de um mês
+  const n = Math.max(1, Math.floor((sc.clientWidth + GAP) / (natural + GAP)));
+  sc.style.setProperty('--gm-w', `${Math.max(natural, (sc.clientWidth - GAP * (n - 1)) / n)}px`);
 }
 
 async function openCell(key, date) {
@@ -1430,6 +1446,7 @@ async function render() {
   const [name, ...params] = (location.hash.replace(/^#\/?/, '') || 'dashboard').split('/');
   const route = routes[name] ? name : 'dashboard';
   $$('.nav a').forEach(a => a.classList.toggle('active', a.dataset.route === route));
+  view.classList.toggle('wide', route === 'lancamentos'); // grade usa toda a largura da tela
   try {
     await routes[route](...params);
   } catch (e) {
@@ -1489,6 +1506,16 @@ dataStore.onConflict = () => choose('Arquivo alterado em outro aparelho',
   'O arquivo no Drive mudou enquanto havia alterações ainda não enviadas daqui. Qual versão manter?',
   [{ label: 'A do Drive', value: 'drive' }, { label: 'A deste aparelho', value: 'here', cls: 'primary' }]).then(v => v || 'here');
 $('#sync').onclick = syncClick;
+
+// recolher/expandir o menu lateral (desktop); a escolha fica lembrada neste navegador
+function setNavCollapsed(on) {
+  document.body.classList.toggle('nav-collapsed', on);
+  $('#nav-toggle .msym').textContent = on ? 'left_panel_open' : 'left_panel_close';
+  $('#nav-toggle').title = on ? 'Mostrar menu' : 'Ocultar menu';
+  store('navCollapsed', on);
+}
+setNavCollapsed(storage('navCollapsed', false));
+$('#nav-toggle').onclick = () => setNavCollapsed(!document.body.classList.contains('nav-collapsed'));
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && dataStore.server && dataStore.status !== 'auth') dataStore.sync();
 });
