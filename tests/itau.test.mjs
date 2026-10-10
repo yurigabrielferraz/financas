@@ -101,3 +101,30 @@ test('import: installments, refunds, identical items, re-import', async () => {
   h('PUT', `/transactions/${pad.id}`, { ...pad, category_id: lazer });
   assert.equal(h('POST', `/cards/${card.id}/import/preview`, st).items.find(i => i.description === 'PADARIA X').category_id, lazer);
 });
+
+test('import: edited names and categories are remembered', async () => {
+  const SQL = await initSqlJs();
+  const sql = f => readFileSync(new URL(`../frontend/sql/${f}`, import.meta.url), 'utf8');
+  const srv = createServer(wrap(new SQL.Database()), sql('schema.sql'), sql('seed.sql'), () => '2026-10-10');
+  const h = (m, u, b) => srv.handle(m, u, b).body;
+  const card = h('POST', '/cards', { name: 'Itaú', closing_day: 30, due_day: 6 });
+  const st = parseItau([page1, page2, page3]);
+  const lazer = h('GET', '/categories').find(c => c.name === 'Lazer').id;
+
+  const pv = h('POST', `/cards/${card.id}/import/preview`, st);
+  assert.equal(pv.items.find(i => i.description === 'DL').name, 'DL');
+  const items = pv.items.map(i => (i.description === 'DL' ? { ...i, name: 'Uber', category_id: lazer }
+    : i.description === 'MOVEIS SA' ? { ...i, name: 'Sofá' } : i));
+  h('POST', `/cards/${card.id}/import`, { month: pv.month, items });
+
+  const oct = h('GET', `/cards/${card.id}/invoice?month=2026-10`).items;
+  assert.ok(oct.some(t => t.description === 'Uber' && t.category_id === lazer));
+  assert.equal(h('GET', `/cards/${card.id}/invoice?month=2026-11`).items.find(t => t.installment_total === 3).description, 'Sofá');
+
+  // próxima importação: nome e categoria sugeridos; renomear não quebra a detecção de duplicados
+  const pv2 = h('POST', `/cards/${card.id}/import/preview`, st);
+  const dl = pv2.items.find(i => i.description === 'DL');
+  assert.equal(dl.name, 'Uber');
+  assert.equal(dl.category_id, lazer);
+  assert.ok(pv2.items.every(i => i.status === 'exists'));
+});

@@ -1149,8 +1149,8 @@ function importInvoiceDialog(card, st, preview) {
   const row = (it, i) => `<label class="row imp-row">
       <input type="checkbox" name="sel" value="${i}" ${it.status === 'exists' ? '' : 'checked'}>
       <div class="main-col">
-        <div class="title">${esc(it.description)}</div>
-        <div class="meta">${fmtDate(it.date)}
+        <input name="name-${i}" class="imp-name" value="${esc(it.name)}" maxlength="120" aria-label="Nome do lançamento">
+        <div class="meta">${it.name !== it.description ? `<span class="muted">${esc(it.description)}</span>` : ''} ${fmtDate(it.date)}
           ${it.installmentNo ? `<span class="tag">${it.installmentNo}/${it.installmentTotal}</span>` : ''}
           <span class="tag ${STATUS[it.status][1]}">${STATUS[it.status][0]}</span>
           ${it.itauCategory ? `<span class="muted">Itaú: ${esc(it.itauCategory)}</span>` : ''}</div>
@@ -1169,7 +1169,8 @@ function importInvoiceDialog(card, st, preview) {
         · ${items.length} lançamentos (${counts('new')} novos, ${counts('exists')} já lançados${counts('update') ? `, ${counts('update')} com valor diferente` : ''})</p>
       <p>${checks}</p>
       <p class="hint">Parcelas: a parcela atual entra nesta fatura e as próximas são criadas nas faturas seguintes.
-        Valores negativos são estornos. A categoria que você escolher aqui é lembrada nas próximas importações.</p>
+        Valores negativos são estornos. Edite o nome para deixá-lo mais legível: nome e categoria
+        ficam lembrados nas próximas importações.</p>
       <div style="display:flex;gap:8px;margin:8px 0"><button type="button" class="btn sm" id="imp-all">Marcar todos</button>
         <button type="button" class="btn sm" id="imp-none">Desmarcar todos</button></div>
       <div class="list">${items.map(row).join('')}</div>`,
@@ -1180,7 +1181,7 @@ function importInvoiceDialog(card, st, preview) {
       $('#imp-none', form).onclick = () => $$('[name=sel]', form).forEach(c => { c.checked = false; });
     },
     async onSubmit(fd) {
-      const selected = fd.getAll('sel').map(i => ({ ...items[+i], category_id: num(fd.get(`cat-${i}`)) }));
+      const selected = fd.getAll('sel').map(i => ({ ...items[+i], name: fd.get(`name-${i}`), category_id: num(fd.get(`cat-${i}`)) }));
       if (!selected.length) throw new Error('Nenhum lançamento selecionado');
       const r = await api.post(`/cards/${card.id}/import`, { month: preview.month, items: selected });
       state.invoiceMonth[card.id] = preview.month;

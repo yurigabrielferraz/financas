@@ -356,34 +356,47 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
     return name ? db.get("SELECT id FROM categories WHERE name = ? AND kind = 'expense'", [name])?.id ?? null : null;
   }
 
+  /** Nome escolhido pelo usuário em importações anteriores, por descrição da fatura. */
+  const getAliases = () => getSettings().import_aliases || {};
+
   /** Compara a fatura lida com o que já está no app: cada item vira new | exists | update. */
   function importPreview(cardId, statement) {
     fetchRow('cards', cardId);
     const month = D.ym(statement.dueDate);
     const used = new Set();
+    const aliases = getAliases();
     return {
       month,
       items: statement.items.map(it => {
         const ex = findExisting(cardId, month, it, used);
-        return { ...it, existing_id: ex?.id ?? null, category_id: suggestCategory(it),
+        const name = aliases[normDesc(it.description)] || it.description;
+        // categoria aprendida dos lançamentos já gravados com esse nome (inclui correções feitas depois)
+        const category = suggestCategory({ ...it, description: name }) ?? suggestCategory(it);
+        return { ...it, name, existing_id: ex?.id ?? null, category_id: category,
           status: !ex ? 'new' : ex.amount === Math.abs(it.amount) ? 'exists' : 'update' };
       }),
     };
   }
 
-  /** Grava os itens marcados. Parcela k/n cria k..n (uma por fatura); valor negativo = estorno/crédito. */
+  /**
+   * Grava os itens marcados. Parcela k/n cria k..n (uma por fatura); valor negativo = estorno/crédito.
+   * `name` (opcional) é o nome escolhido pelo usuário; fica lembrado para as próximas importações.
+   */
   function importItems(cardId, month, items) {
     fetchRow('cards', cardId);
     const out = { created: 0, updated: 0, skipped: 0 };
     const used = new Set();
+    const aliases = getAliases();
     for (const it of items) {
+      const name = String(it.name || '').trim() || it.description;
+      if (name !== it.description) aliases[normDesc(it.description)] = name;
       const ex = findExisting(cardId, month, it, used);
       if (ex) {
         if (ex.amount !== Math.abs(it.amount)) { db.update('transactions', ex.id, { amount: Math.abs(it.amount) }); out.updated++; }
         else out.skipped++;
         continue;
       }
-      const base = { kind: it.amount < 0 ? 'income' : 'expense', description: it.description, amount: Math.abs(it.amount),
+      const base = { kind: it.amount < 0 ? 'income' : 'expense', description: name, amount: Math.abs(it.amount),
         category_id: it.category_id ?? null, card_id: cardId, paid: false };
       if (!it.installmentNo) {
         used.add(db.insert('transactions', { ...base, date: it.date, invoice_month: month }));
@@ -399,6 +412,7 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
       }
       out.created++;
     }
+    db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['import_aliases', JSON.stringify(aliases)]);
     return out;
   }
 

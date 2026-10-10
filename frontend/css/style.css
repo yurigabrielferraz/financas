@@ -356,3 +356,4 @@ dialog.wide { width: min(860px, calc(100vw - 24px)); }
   .imp-row { flex-wrap: wrap; }
   .imp-row .imp-cat { order: 5; width: 100%; }
 }
+.imp-row .imp-name { min-height: 34px; padding: 4px 8px; font-size: 15px; font-weight: 500; margin-bottom: 2px; }

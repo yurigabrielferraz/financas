@@ -51,7 +51,8 @@ status (novo / já lançado / valor diferente), categoria sugerida e a conferên
 
 - Parcela `k/n`: entra na fatura atual e as parcelas seguintes são criadas nas próximas faturas.
 - Reimportar (ou importar o mês seguinte) não duplica: casa por fatura, data da compra, parcela e valor.
-- Categoria: a última usada para o mesmo estabelecimento; senão, a categoria que o Itaú informa.
+- Nome editável na prévia; o nome escolhido fica lembrado para o mesmo estabelecimento nas próximas faturas.
+- Categoria: a última usada para esse nome no app; senão, a categoria que o Itaú informa.
 - Ignora "Pagamentos efetuados", "Compras parceladas - próximas faturas" e encargos.
 
 ## Versões anteriores (a remover)
