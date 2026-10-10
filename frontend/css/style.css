@@ -357,3 +357,5 @@ dialog.wide { width: min(860px, calc(100vw - 24px)); }
   .imp-row .imp-cat { order: 5; width: 100%; }
 }
 .imp-row .imp-name { min-height: 34px; padding: 4px 8px; font-size: 15px; font-weight: 500; margin-bottom: 2px; }
+.new-cat { display: flex; gap: 8px; align-items: center; padding: 6px 0; }
+.new-cat input { flex: 1; min-height: 40px; }

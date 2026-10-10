@@ -52,7 +52,8 @@ async function refresh() {
   refreshReminders();
 }
 
-const num = v => (v === '' || v == null ? null : Number(v));
+const NEW_CAT = '__new';
+const num = v => (v === '' || v == null || v === NEW_CAT ? null : Number(v));
 const activeAccounts = () => state.accounts.filter(a => !a.archived);
 const activeCards = () => state.cards.filter(c => !c.archived);
 const catById = id => state.categories.find(c => c.id === id);
@@ -99,8 +100,50 @@ function dueTag(iso, paid) {
 function categoryOptions(kind, selected) {
   const cats = state.categories.filter(c => c.kind === kind && (!c.archived || c.id === selected));
   return `<option value="">Sem categoria</option>` +
-    cats.map(c => `<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+    cats.map(c => `<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>${esc(c.name)}</option>`).join('') +
+    `<option value="${NEW_CAT}">+ Nova categoria…</option>`;
 }
+
+const CAT_COLORS = ['#6366f1', '#0ea5e9', '#22c55e', '#f97316', '#eab308', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#84cc16', '#f43f5e', '#64748b'];
+
+/** "+ Nova categoria…" em qualquer select de categoria do modal: cria ali mesmo, sem sair do formulário. */
+function newCategoryInline(sel) {
+  const kind = sel.form?.elements.kind?.value || 'expense';
+  const anchor = sel.closest('label') || sel;
+  anchor.parentElement.querySelector('.new-cat')?.remove();
+  const box = document.createElement('div');
+  box.className = 'new-cat full';
+  box.innerHTML = `<input placeholder="Nome da nova categoria (${kind === 'income' ? 'receita' : 'despesa'})" maxlength="60">
+    <button type="button" class="btn sm primary">Criar</button><button type="button" class="btn sm ghost">Cancelar</button>`;
+  anchor.after(box);
+  const [input, ok, cancel] = box.querySelectorAll('input, button');
+  input.focus();
+  cancel.onclick = () => { sel.value = sel.dataset.prev ?? ''; box.remove(); };
+  const create = async () => {
+    const name = input.value.trim();
+    if (!name) return input.focus();
+    try {
+      const used = new Set(state.categories.map(c => c.color));
+      const color = CAT_COLORS.find(c => !used.has(c)) || CAT_COLORS[state.categories.length % CAT_COLORS.length];
+      const cat = await api.post('/categories', { name, kind, color });
+      state.categories.push(cat);
+      // disponível em todos os selects de categoria abertos (ex.: cada item da importação)
+      for (const s of $$('select', $('#modal'))) {
+        const marker = [...s.options].find(o => o.value === NEW_CAT);
+        if (marker && (s === sel || kind === 'expense')) s.insertBefore(new Option(name, cat.id), marker);
+      }
+      sel.value = String(cat.id);
+      box.remove();
+      toast(`Categoria “${name}” criada`);
+    } catch (err) { toast(err.message, 'error'); }
+  };
+  ok.onclick = create;
+  input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); create(); } };
+}
+$('#modal').addEventListener('focusin', e => { if (e.target.tagName === 'SELECT') e.target.dataset.prev = e.target.value; });
+$('#modal').addEventListener('change', e => {
+  if (e.target.tagName === 'SELECT' && e.target.value === NEW_CAT) newCategoryInline(e.target);
+});
 
 function sourceOptions(selected, { cards = true } = {}) {
   const accs = state.accounts.filter(a => !a.archived || selected === `a:${a.id}`);
@@ -1179,6 +1222,7 @@ function importInvoiceDialog(card, st, preview) {
       <select name="cat-${i}" class="imp-cat" ${it.amount < 0 ? 'disabled' : ''}>
         <option value="">Sem categoria</option>
         ${expenseCats.map(c => `<option value="${c.id}" ${c.id === it.category_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+        <option value="${NEW_CAT}">+ Nova categoria…</option>
       </select>
       <div class="amount num ${it.amount < 0 ? 'pos' : ''}">${fmtMoney(it.amount)}</div>
     </label>`;
