@@ -418,6 +418,7 @@ function recurrenceForm(rec = null) {
       <label class="field"><span>Categoria</span><select name="category_id">${categoryOptions(r.kind, r.category_id)}</select></label>
       <label class="field"><span>Conta / cartão</span><select name="source">${sourceOptions(src)}</select></label>
       <label class="field"><span>Começa em</span><input type="date" name="start_date" value="${r.start_date}" required></label>
+      <p class="hint full" id="start-hint" style="color:var(--warn)" hidden></p>
       <label class="field"><span>Termina em <span class="hint">(opcional)</span></span><input type="date" name="end_date" value="${r.end_date ?? ''}"></label>
       <label class="field"><span>Lembrar quantos dias antes</span><input type="number" name="reminder_days" min="0" max="60" value="${r.reminder_days ?? ''}" placeholder="padrão: ${state.settings.reminder_days_default}"></label>
       <label class="inline" style="align-self:end;padding-bottom:10px"><input type="checkbox" name="active" ${r.active ? 'checked' : ''}> Ativa</label>
@@ -427,11 +428,23 @@ function recurrenceForm(rec = null) {
     onOpen(form) {
       const sync = () => {
         const income = form.kind.value === 'income';
+        // dia já passou no mês de início: avisa que esse mês fica de fora
+        const start = form.start_date.value, day = +form.day.value;
+        const skips = form.frequency.value === 'monthly' && start && day && day < +start.slice(8, 10);
+        const hint = $('#start-hint', form);
+        hint.hidden = !skips;
+        if (skips) {
+          hint.textContent = `O dia ${day} de ${monthLabel(start.slice(0, 7))} é antes do início, então esse mês fica de fora ` +
+            `(primeiro lançamento em ${monthLabel(shiftMonth(start.slice(0, 7), 1))}). ` +
+            `Para incluí-lo, coloque o início em 01/${start.slice(5, 7)}/${start.slice(0, 4)}.`;
+        }
         $('#f-day', form).hidden = form.frequency.value === 'weekly';
         $('#f-bill', form).hidden = income;
         $('#day-label', form).textContent = income ? 'Dia do recebimento (31 = último dia do mês)' : 'Dia do vencimento';
       };
       form.frequency.onchange = sync;
+      form.start_date.oninput = sync;
+      form.day.oninput = sync;
       sync();
       $$('[name=kind]', form).forEach(x => x.onchange = () => {
         form.category_id.innerHTML = categoryOptions(form.kind.value, null);
