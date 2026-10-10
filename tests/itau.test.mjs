@@ -6,6 +6,8 @@ import initSqlJs from 'sql.js';
 import { parseItau, parseMoneyBR } from '../frontend/js/core/itau.js';
 import { createServer, wrap } from '../frontend/js/core/server.js';
 
+const SQL = await initSqlJs(); // uma vez por arquivo
+
 // item de texto: largura aproximada (5pt por caractere), como o pdf.js entrega
 const t = (s, x, y) => ({ s, x, y, w: s.length * 5 });
 /** Linha de lançamento + linha de categoria logo abaixo, numa coluna que começa em `x`. */
@@ -67,7 +69,6 @@ test('parse statement', () => {
 });
 
 test('import: installments, refunds, identical items, re-import', async () => {
-  const SQL = await initSqlJs();
   const sql = f => readFileSync(new URL(`../frontend/sql/${f}`, import.meta.url), 'utf8');
   const srv = createServer(wrap(new SQL.Database()), sql('schema.sql'), sql('seed.sql'), () => '2026-10-10');
   const h = (m, u, b) => srv.handle(m, u, b).body;
@@ -103,7 +104,6 @@ test('import: installments, refunds, identical items, re-import', async () => {
 });
 
 test('import: edited names and categories are remembered', async () => {
-  const SQL = await initSqlJs();
   const sql = f => readFileSync(new URL(`../frontend/sql/${f}`, import.meta.url), 'utf8');
   const srv = createServer(wrap(new SQL.Database()), sql('schema.sql'), sql('seed.sql'), () => '2026-10-10');
   const h = (m, u, b) => srv.handle(m, u, b).body;
