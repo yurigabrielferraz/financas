@@ -262,3 +262,19 @@ test('recurrence switched from account to card moves this month unpaid occurrenc
   c.put(`/api/recurrences/${r.id}`, { ...r, account_id: 1, card_id: null });
   assert.equal(c.get('/api/transactions?month=2026-10').json().find(t => t.description === 'Spotify').card_id, null);
 });
+
+test('edit installments: only this, this and following, all', () => {
+  const c = makeClient();
+  const card = c.post('/api/cards', { name: 'C', closing_day: 30, due_day: 6 }).json();
+  const txs = c.post('/api/transactions', { kind: 'expense', description: 'Geladeira', amount: 400, date: '2026-10-05', card_id: card.id, installments: 4 }).json();
+  const amounts = () => c.get(`/api/transactions/${txs[0].id}`).json() && txs.map(t => c.get(`/api/transactions/${t.id}`).json().amount);
+  const edit = (t, amount, scope) => c.put(`/api/transactions/${t.id}?scope=${scope}`, { ...t, amount });
+  edit(txs[0], 130, 'one');
+  assert.deepEqual(amounts(), [130, 100, 100, 100]);
+  edit(txs[1], 90, 'future');
+  assert.deepEqual(amounts(), [130, 90, 90, 90]);
+  edit(txs[2], 95, 'all');
+  assert.deepEqual(amounts(), [95, 95, 95, 95]);
+  // datas e faturas de cada parcela não mudam
+  assert.deepEqual(txs.map(t => c.get(`/api/transactions/${t.id}`).json().invoice_month), ['2026-11', '2026-12', '2027-01', '2027-02']);
+});

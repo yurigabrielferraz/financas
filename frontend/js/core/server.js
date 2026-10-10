@@ -639,9 +639,18 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
       return ids.map(txOut);
     }],
     ['GET', '/transactions/:id', ({ id }) => txOut(id)],
-    ['PUT', '/transactions/:id', ({ id, body }) => {
-      fetchRow('transactions', id);
-      db.update('transactions', id, { ...txFields(body), updated_at: new Date().toISOString().slice(0, 19) });
+    ['PUT', '/transactions/:id', ({ id, body, q }) => {
+      const tx = fetchRow('transactions', id);
+      const data = { ...txFields(body), updated_at: new Date().toISOString().slice(0, 19) };
+      db.update('transactions', id, data);
+      // parcelado: scope=future (esta e as seguintes) ou all (todas) leva os mesmos dados para as outras
+      // parcelas; data, fatura, conta/cartão e pagamento continuam os de cada uma
+      if (tx.installment_group && ['future', 'all'].includes(q.scope)) {
+        const shared = ['description', 'amount', 'category_id', 'nature', 'notes', 'reminder_days', 'updated_at'];
+        const sets = shared.map(k => `${k} = ?`).join(', ');
+        db.run(`UPDATE transactions SET ${sets} WHERE installment_group = ? AND id != ?${q.scope === 'future' ? ' AND installment_no > ?' : ''}`,
+          [...shared.map(k => data[k]), tx.installment_group, id, ...(q.scope === 'future' ? [tx.installment_no] : [])]);
+      }
       return txOut(id);
     }],
     ['POST', '/transactions/:id/pay', ({ id, body }) => {

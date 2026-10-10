@@ -215,7 +215,7 @@ function transactionForm(tx = null, defaults = {}) {
   const nature = t.nature ?? (isEdit && t.kind === 'expense' ? 'bill' : t.nature);
   const src = t.card_id ? `c:${t.card_id}` : t.account_id ? `a:${t.account_id}` : isEdit ? '' : defaultSource();
   const paid = isEdit ? t.paid : t.date <= todayISO();
-  const installmentInfo = t.installment_total ? `<p class="hint full">Parcela ${t.installment_no}/${t.installment_total} — a edição vale só para esta parcela.</p>` : '';
+  const installmentInfo = t.installment_total ? `<p class="hint full">Parcela ${t.installment_no}/${t.installment_total} — ao salvar, você escolhe se a alteração vale só para esta, para as seguintes ou para todas.</p>` : '';
   const recurrenceInfo = t.recurrence_id ? `<p class="hint full">↻ Gerado por uma conta fixa. Para mudar todos os meses, edite em <a href="#/fixas">Contas fixas</a>.</p>` : '';
 
   openModal({
@@ -311,7 +311,16 @@ function transactionForm(tx = null, defaults = {}) {
         nature: fd.get('nature') || null,
       };
       if (isEdit) {
-        await api.put(`/transactions/${tx.id}`, payload);
+        let scope = 'one';
+        if (tx.installment_group) {
+          scope = await choose('Salvar parcelado', `“${tx.description}” é a parcela ${tx.installment_no}/${tx.installment_total}. Aplicar a alteração em:`, [
+            { label: 'Só esta', value: 'one' },
+            { label: 'Esta e as seguintes', value: 'future' },
+            { label: 'Todas', value: 'all', cls: 'primary' },
+          ]);
+          if (!scope) return;
+        }
+        await api.put(`/transactions/${tx.id}?scope=${scope}`, payload);
         toast('Lançamento atualizado');
       } else {
         payload.installments = Math.max(1, +fd.get('installments') || 1);
