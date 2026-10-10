@@ -43,6 +43,17 @@ O login dura 1 h; depois disso, um toque em "Conectar"/na nuvem renova.
 Conflito: antes de enviar, a página compara o arquivo do Drive com o da última sincronização; se mudou em
 outro aparelho enquanto havia alterações aqui, pergunta qual versão manter (não mescla).
 
+## Importar fatura do Itaú
+
+Em **Cartões › [cartão] › Importar fatura (PDF)**: escolha o PDF baixado no app do Itaú. O PDF é lido no
+navegador (pdf.js; o arquivo não sai do aparelho) por `js/core/itau.js`, e uma prévia mostra cada lançamento com
+status (novo / já lançado / valor diferente), categoria sugerida e a conferência da soma com o total da fatura.
+
+- Parcela `k/n`: entra na fatura atual e as parcelas seguintes são criadas nas próximas faturas.
+- Reimportar (ou importar o mês seguinte) não duplica: casa por fatura, data da compra, parcela e valor.
+- Categoria: a última usada para o mesmo estabelecimento; senão, a categoria que o Itaú informa.
+- Ignora "Pagamentos efetuados", "Compras parceladas - próximas faturas" e encargos.
+
 ## Versões anteriores (a remover)
 
 `backend/` (API Python) e `android/` (app nativo) não são mais usados; ficam até a versão web ser validada.

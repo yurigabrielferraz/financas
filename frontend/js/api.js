@@ -5,7 +5,7 @@ import { store } from './store.js';
 function request(method, path, body) {
   const res = store.server.handle(method, path, body);
   if (res.status >= 400) throw new Error(typeof res.body?.detail === 'string' ? res.body.detail : `Erro ${res.status}`);
-  if (method !== 'GET') store.markDirty();
+  if (method !== 'GET' && !path.endsWith('/preview')) store.markDirty();
   return Promise.resolve(res.body);
 }
 

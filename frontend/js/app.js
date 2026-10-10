@@ -1,5 +1,6 @@
 import { api, downloadBackup } from './api.js';
 import { store as dataStore, FILE_NAME } from './store.js';
+import { parseItau } from './core/itau.js';
 import {
   fmtMoney, parseMoney, centsToInput, todayISO, currentMonth, shiftMonth, monthLabel, monthShort,
   fmtDate, fmtDateFull, fmtDayHeader, daysUntil, dueLabel, esc, toast, storage, store,
@@ -911,6 +912,8 @@ async function CardDetail(id) {
         <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
           ${inv.paid ? '<button class="btn" id="inv-unpay">Desfazer pagamento</button>' : `<button class="btn primary" id="inv-pay" ${inv.total <= 0 ? 'disabled' : ''}>Pagar fatura</button>`}
           <button class="btn" id="inv-add">+ Compra neste cartão</button>
+          <button class="btn" id="inv-import"><span class="msym">upload_file</span>Importar fatura (PDF)</button>
+          <input type="file" id="inv-file" accept="application/pdf,.pdf" hidden>
         </div>
       </section>
       <section class="panel">
@@ -936,6 +939,17 @@ async function CardDetail(id) {
   $$('[data-inv]').forEach(b => b.onclick = () => { state.invoiceMonth[id] = shiftMonth(month, +b.dataset.inv); render(); });
   $('#card-edit').onclick = () => cardForm(card);
   $('#inv-add').onclick = () => transactionForm(null, { card_id: id });
+  $('#inv-import').onclick = () => $('#inv-file').click();
+  $('#inv-file').onchange = async e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    toast('Lendo a fatura…');
+    try {
+      const statement = parseItau(await readPdfPages(file));
+      importInvoiceDialog(card, statement, await api.post(`/cards/${id}/import/preview`, statement));
+    } catch (err) { toast(err.message, 'error'); }
+  };
   $('#inv-pay')?.addEventListener('click', () => invoicePayDialog({ ...inv, card_name: card.name }));
   $('#inv-unpay')?.addEventListener('click', async () => {
     await api.del(`/cards/${id}/invoice/${month}/pay`);
@@ -1093,6 +1107,84 @@ function restoreDialog(file) {
       await dataStore.importBytes(await file.arrayBuffer());
       state.invoiceMonth = {};
       toast('Backup importado');
+      refresh();
+    },
+  });
+}
+
+// ======================================================================= importar fatura (PDF)
+
+const PDFJS = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/';
+
+/** Texto de cada página do PDF com posições ({ s, x, y, w }). Tudo no navegador: o arquivo não sai do aparelho. */
+async function readPdfPages(file) {
+  const pdfjs = await import(PDFJS + 'pdf.min.mjs');
+  pdfjs.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.mjs';
+  const data = new Uint8Array(await file.arrayBuffer());
+  let doc;
+  try {
+    doc = await pdfjs.getDocument({ data: data.slice() }).promise;
+  } catch (e) {
+    if (e.name !== 'PasswordException') throw e;
+    const password = prompt('Este PDF tem senha. Digite a senha do arquivo:');
+    if (!password) throw new Error('PDF protegido por senha');
+    doc = await pdfjs.getDocument({ data: data.slice(), password }).promise;
+  }
+  const pages = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const content = await (await doc.getPage(p)).getTextContent();
+    pages.push(content.items.map(i => ({ s: i.str, x: i.transform[4], y: i.transform[5], w: i.width })));
+  }
+  return pages;
+}
+
+function importInvoiceDialog(card, st, preview) {
+  const items = preview.items;
+  const sum = items.reduce((a, i) => a + i.amount, 0);
+  const checks = st.launchesTotal == null ? ''
+    : sum === st.launchesTotal ? `<span class="tag pos">✓ soma confere com a fatura (${fmtMoney(st.launchesTotal)})</span>`
+    : `<span class="tag danger">soma ${fmtMoney(sum)} ≠ fatura ${fmtMoney(st.launchesTotal)} — confira os itens</span>`;
+  const expenseCats = state.categories.filter(c => c.kind === 'expense' && !c.archived);
+  const STATUS = { new: ['novo', 'primary'], exists: ['já lançado', ''], update: ['valor diferente — atualiza', 'warn'] };
+  const row = (it, i) => `<label class="row imp-row">
+      <input type="checkbox" name="sel" value="${i}" ${it.status === 'exists' ? '' : 'checked'}>
+      <div class="main-col">
+        <div class="title">${esc(it.description)}</div>
+        <div class="meta">${fmtDate(it.date)}
+          ${it.installmentNo ? `<span class="tag">${it.installmentNo}/${it.installmentTotal}</span>` : ''}
+          <span class="tag ${STATUS[it.status][1]}">${STATUS[it.status][0]}</span>
+          ${it.itauCategory ? `<span class="muted">Itaú: ${esc(it.itauCategory)}</span>` : ''}</div>
+      </div>
+      <select name="cat-${i}" class="imp-cat" ${it.amount < 0 ? 'disabled' : ''}>
+        <option value="">Sem categoria</option>
+        ${expenseCats.map(c => `<option value="${c.id}" ${c.id === it.category_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+      </select>
+      <div class="amount num ${it.amount < 0 ? 'pos' : ''}">${fmtMoney(it.amount)}</div>
+    </label>`;
+  const counts = s => items.filter(i => i.status === s).length;
+  openModal({
+    title: `Importar fatura — ${card.name}`,
+    submitLabel: 'Importar selecionados',
+    body: `<p class="small">Vencimento <b>${fmtDateFull(st.dueDate)}</b>${st.last4 ? ` · cartão final <b>${st.last4}</b>` : ''}
+        · ${items.length} lançamentos (${counts('new')} novos, ${counts('exists')} já lançados${counts('update') ? `, ${counts('update')} com valor diferente` : ''})</p>
+      <p>${checks}</p>
+      <p class="hint">Parcelas: a parcela atual entra nesta fatura e as próximas são criadas nas faturas seguintes.
+        Valores negativos são estornos. A categoria que você escolher aqui é lembrada nas próximas importações.</p>
+      <div style="display:flex;gap:8px;margin:8px 0"><button type="button" class="btn sm" id="imp-all">Marcar todos</button>
+        <button type="button" class="btn sm" id="imp-none">Desmarcar todos</button></div>
+      <div class="list">${items.map(row).join('')}</div>`,
+    onOpen(form) {
+      $('#modal').classList.add('wide');
+      $('#modal').addEventListener('close', () => $('#modal').classList.remove('wide'), { once: true });
+      $('#imp-all', form).onclick = () => $$('[name=sel]', form).forEach(c => { c.checked = true; });
+      $('#imp-none', form).onclick = () => $$('[name=sel]', form).forEach(c => { c.checked = false; });
+    },
+    async onSubmit(fd) {
+      const selected = fd.getAll('sel').map(i => ({ ...items[+i], category_id: num(fd.get(`cat-${i}`)) }));
+      if (!selected.length) throw new Error('Nenhum lançamento selecionado');
+      const r = await api.post(`/cards/${card.id}/import`, { month: preview.month, items: selected });
+      state.invoiceMonth[card.id] = preview.month;
+      toast(`${r.created} lançamento(s) importado(s)${r.updated ? `, ${r.updated} atualizado(s)` : ''}`);
       refresh();
     },
   });

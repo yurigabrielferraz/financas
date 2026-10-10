@@ -320,6 +320,88 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
     return { start, opening_balance: opening, months: result };
   }
 
+  // ---------------------------------------------------------------- importação de fatura
+
+  /** Categoria do Itaú (linha abaixo do lançamento) -> nome da categoria padrão do app. */
+  const ITAU_CATEGORY = {
+    transporte: 'Transporte', restaurante: 'Alimentação', supermercado: 'Mercado', educacao: 'Educação',
+    'educação': 'Educação', eletronicos: 'Compras', 'eletrônicos': 'Compras', vestuario: 'Compras',
+    'vestuário': 'Compras', retail: 'Compras', saude: 'Saúde', 'saúde': 'Saúde', servicos: 'Assinaturas',
+    'serviços': 'Assinaturas', hospedagem: 'Lazer', turismo: 'Lazer', entretenimento: 'Lazer',
+  };
+  const normDesc = d => String(d).toUpperCase().replace(/\s+/g, ' ').trim();
+
+  /**
+   * Lançamento do app que corresponde a um item da fatura (para não duplicar). Parcela k/n: mesma fatura,
+   * mesmo k/n e data da compra (gravada como compra + k-1 meses). `used`: ids já casados nesta leitura,
+   * para que duas compras iguais no mesmo dia não virem uma só.
+   */
+  function findExisting(cardId, month, it, used) {
+    const notUsed = used.size ? ` AND id NOT IN (${[...used].join(',')})` : '';
+    const row = it.installmentNo
+      ? db.get(`SELECT id, amount FROM transactions WHERE card_id = ? AND invoice_month = ? AND installment_no = ?
+                AND installment_total = ? AND date = ?${notUsed} LIMIT 1`,
+      [cardId, month, it.installmentNo, it.installmentTotal, D.addMonths(it.date, it.installmentNo - 1)])
+      : db.get(`SELECT id, amount FROM transactions WHERE card_id = ? AND invoice_month = ? AND date = ?
+                AND amount = ? AND installment_no IS NULL${notUsed} LIMIT 1`, [cardId, month, it.date, Math.abs(it.amount)]);
+    if (row) used.add(row.id);
+    return row;
+  }
+
+  function suggestCategory(it) {
+    const learned = db.get(`SELECT category_id FROM transactions WHERE UPPER(description) = ? AND category_id IS NOT NULL
+                            ORDER BY updated_at DESC, id DESC LIMIT 1`, [normDesc(it.description)]);
+    if (learned) return learned.category_id;
+    const name = ITAU_CATEGORY[it.itauCategory];
+    return name ? db.get("SELECT id FROM categories WHERE name = ? AND kind = 'expense'", [name])?.id ?? null : null;
+  }
+
+  /** Compara a fatura lida com o que já está no app: cada item vira new | exists | update. */
+  function importPreview(cardId, statement) {
+    fetchRow('cards', cardId);
+    const month = D.ym(statement.dueDate);
+    const used = new Set();
+    return {
+      month,
+      items: statement.items.map(it => {
+        const ex = findExisting(cardId, month, it, used);
+        return { ...it, existing_id: ex?.id ?? null, category_id: suggestCategory(it),
+          status: !ex ? 'new' : ex.amount === Math.abs(it.amount) ? 'exists' : 'update' };
+      }),
+    };
+  }
+
+  /** Grava os itens marcados. Parcela k/n cria k..n (uma por fatura); valor negativo = estorno/crédito. */
+  function importItems(cardId, month, items) {
+    fetchRow('cards', cardId);
+    const out = { created: 0, updated: 0, skipped: 0 };
+    const used = new Set();
+    for (const it of items) {
+      const ex = findExisting(cardId, month, it, used);
+      if (ex) {
+        if (ex.amount !== Math.abs(it.amount)) { db.update('transactions', ex.id, { amount: Math.abs(it.amount) }); out.updated++; }
+        else out.skipped++;
+        continue;
+      }
+      const base = { kind: it.amount < 0 ? 'income' : 'expense', description: it.description, amount: Math.abs(it.amount),
+        category_id: it.category_id ?? null, card_id: cardId, paid: false };
+      if (!it.installmentNo) {
+        used.add(db.insert('transactions', { ...base, date: it.date, invoice_month: month }));
+        out.created++;
+        continue;
+      }
+      const group = crypto.randomUUID().replaceAll('-', '');
+      for (let k = it.installmentNo; k <= it.installmentTotal; k++) {
+        const m = D.shiftYm(month, k - it.installmentNo);
+        if (k > it.installmentNo && findExisting(cardId, m, { ...it, installmentNo: k }, used)) continue;
+        used.add(db.insert('transactions', { ...base, date: D.addMonths(it.date, k - 1), invoice_month: m,
+          installment_group: group, installment_no: k, installment_total: it.installmentTotal }));
+      }
+      out.created++;
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------- rotas (main.py)
 
   const accountData = b => {
@@ -459,6 +541,8 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
       db.run('DELETE FROM invoice_payments WHERE card_id = ? AND month = ?', [id, validMonth(month)]);
       return invoiceSummary(card, month, today());
     }],
+    ['POST', '/cards/:id/import/preview', ({ id, body }) => importPreview(id, body)],
+    ['POST', '/cards/:id/import', ({ id, body }) => importItems(id, validMonth(body.month), body.items || [])],
     // contas fixas
     ['GET', '/recurrences', () => {
       const t = today();
@@ -588,7 +672,7 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
       const params = Object.fromEntries(r.names.map((n, i) => [n, n === 'id' ? +m[i + 1] : decodeURIComponent(m[i + 1])]));
       try {
         const result = db.tx(() => r.fn({ ...params, q, body: body || {} }));
-        return { status: result === null ? 204 : method === 'POST' && !/\/(pay|reset)$/.test(path) ? 201 : 200, body: result };
+        return { status: result === null ? 204 : method === 'POST' && !/\/(pay|reset|preview|import)$/.test(path) ? 201 : 200, body: result };
       } catch (e) {
         if (e instanceof HttpError) return { status: e.status, body: { detail: e.message } };
         throw e;

@@ -347,3 +347,12 @@ dialog form { display: flex; flex-direction: column; max-height: calc(100dvh - 2
 .onboarding { max-width: 460px; margin: 40px auto; display: flex; flex-direction: column; gap: 12px; }
 .onboarding .btn { width: 100%; height: 48px; }
 .icon-btn.warn { color: var(--md-error); }
+
+/* ---------- importar fatura ---------- */
+dialog.wide { width: min(860px, calc(100vw - 24px)); }
+.imp-row { cursor: pointer; }
+.imp-row .imp-cat { width: 170px; flex: none; min-height: 36px; padding: 6px 10px; font-size: 14px; }
+@media (max-width: 600px) {
+  .imp-row { flex-wrap: wrap; }
+  .imp-row .imp-cat { order: 5; width: 100%; }
+}
