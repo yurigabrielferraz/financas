@@ -1,6 +1,4 @@
-.venv/
-__pycache__/
-*.pyc
-.pytest_cache/
-backend/data/
 node_modules/
+.DS_Store
+# cópia dos dados da versão antiga (Python), fora do git
+legado/
