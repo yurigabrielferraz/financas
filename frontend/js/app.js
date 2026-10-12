@@ -2,6 +2,7 @@ import { api, downloadBackup } from './api.js';
 import { store as dataStore, FILE_NAME, googleFetch, hasScope, requestScope } from './store.js';
 import { CAL_SCOPE, buildEvents, ensureCalendar, deleteCalendar, syncCalendar } from './calendar.js';
 import { parseItau } from './core/itau.js';
+import { syncBot } from './bot.js';
 import {
   fmtMoney, parseMoney, centsToInput, todayISO, currentMonth, shiftMonth, monthLabel, monthShort,
   fmtDate, fmtDateFull, fmtDayHeader, daysUntil, dueLabel, esc, toast, storage, store,
@@ -52,6 +53,33 @@ async function refresh() {
   await render();
   refreshReminders();
   scheduleCalendarSync();
+  scheduleBotSync();
+}
+
+// ======================================================================= bot do Telegram
+
+let botTimer, botStatus = '';
+const botEnabled = () => dataStore.mode === 'drive' && !!state.settings?.bot_enabled;
+
+function scheduleBotSync(delay = 2000) {
+  if (!botEnabled()) return;
+  clearTimeout(botTimer);
+  botTimer = setTimeout(() => runBotSync().catch(() => {}), delay);
+}
+
+async function runBotSync() {
+  if (!botEnabled()) return;
+  const setStatus = t => { botStatus = t; const el = $('#bot-status'); if (el) el.textContent = t; };
+  try {
+    const n = await syncBot(googleFetch, api);
+    const t = new Date();
+    setStatus(`Verificado às ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}` + (n ? ` · ${n} novo(s)` : ''));
+    if (n) { toast(`${n} lançamento(s) do Telegram`); refresh(); }
+    return n;
+  } catch (e) {
+    setStatus(`Falha ao verificar o Telegram: ${e.message}`);
+    throw e;
+  }
 }
 
 // ======================================================================= Google Agenda
@@ -1176,6 +1204,29 @@ async function Settings() {
                    O app cria uma agenda própria e só mexe nela.</p>
                  <button class="btn primary" id="gcal-on"><span class="msym">event</span>Ativar lembretes no Google Agenda</button>`}
         </section>
+        <section class="panel">
+          <h2>Telegram</h2>
+          ${dataStore.mode !== 'drive'
+            ? '<p class="muted small">Disponível com os dados no Google Drive.</p>'
+            : s.bot_enabled
+              ? `<p class="small">Mande para o seu bot coisas como <i>"gastei 25,48 de uber"</i>: ele anota e o app grava ao abrir.</p>
+                 <p class="muted small" id="bot-status">${esc(botStatus)}</p>
+                 <details><summary class="small">Como configurar o bot (uma vez)</summary><ol class="small">
+                   <li>No Telegram, fale com <b>@BotFather</b>, envie <code>/newbot</code> e guarde o token.</li>
+                   <li>Crie uma chave do Gemini em <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</li>
+                   <li>Em <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener">script.google.com</a>, cole o código do script (botão abaixo) no lugar do que estiver lá e salve.</li>
+                   <li>Configurações do projeto › Propriedades do script: <code>TELEGRAM_TOKEN</code> e <code>GEMINI_KEY</code>.</li>
+                   <li>Mande "oi" para o seu bot. No editor, escolha a função <code>configurar</code>, clique em Executar e autorize.</li>
+                 </ol></details>
+                 <div style="display:flex;gap:8px;flex-wrap:wrap">
+                   <button class="btn" id="bot-copy"><span class="msym">content_copy</span>Copiar código do script</button>
+                   <button class="btn" id="bot-sync">Verificar agora</button>
+                   <button class="btn danger" id="bot-off">Desativar</button>
+                 </div>`
+              : `<p class="muted small">Anote gastos mandando mensagem para um bot seu no Telegram ("gastei 25,48 de uber").
+                   O bot roda na sua conta Google (Apps Script) e usa o Gemini para entender as mensagens.</p>
+                 <button class="btn primary" id="bot-on"><span class="msym">send</span>Ativar Telegram</button>`}
+        </section>
       </div>
     </div>`;
 
@@ -1254,6 +1305,28 @@ async function Settings() {
       toast(how === 'delete' ? 'Agenda apagada' : 'Lembretes no Google Agenda desativados');
       Settings();
     } catch (e) { toast(e.message, 'error'); }
+  });
+  $('#bot-on')?.addEventListener('click', async () => {
+    state.settings = await api.put('/settings', { bot_enabled: true });
+    await Settings();
+    $('#bot-status').parentElement.querySelector('details').open = true;
+    runBotSync().catch(e => toast(e.message, 'error')); // cria os arquivos no Drive
+  });
+  $('#bot-sync')?.addEventListener('click', async () => {
+    try { if (!(await runBotSync())) toast('Nada novo no Telegram'); } catch (e) { toast(e.message, 'error'); }
+  });
+  $('#bot-copy')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(await (await fetch('telegram-bot.gs', { cache: 'no-cache' })).text());
+      toast('Código copiado');
+    } catch (e) { toast(`Não foi possível copiar: ${e.message}`, 'error'); }
+  });
+  $('#bot-off')?.addEventListener('click', async () => {
+    if (!(await choose('Desativar Telegram', 'Parar de importar o que o bot anotar? Para desligar o bot, apague o projeto no script.google.com.',
+      [{ label: 'Desativar', value: true, cls: 'danger' }]))) return;
+    state.settings = await api.put('/settings', { bot_enabled: false });
+    botStatus = '';
+    Settings();
   });
   $('#switch-storage').onclick = async () => {
     const ok = await choose('Trocar armazenamento',
@@ -1488,7 +1561,7 @@ document.addEventListener('click', () => {
   if (renewing || !dataStore.needsRenewal()) return;
   renewing = true;
   dataStore.renew()
-    .then(() => scheduleCalendarSync(500))
+    .then(() => { scheduleCalendarSync(500); scheduleBotSync(500); })
     .catch(e => toast(`Não foi possível renovar o acesso ao Google: ${e.message}`, 'error'))
     .finally(() => { renewing = false; });
 }, true);
@@ -1517,7 +1590,7 @@ function setNavCollapsed(on) {
 setNavCollapsed(storage('navCollapsed', false));
 $('#nav-toggle').onclick = () => setNavCollapsed(!document.body.classList.contains('nav-collapsed'));
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && dataStore.server && dataStore.status !== 'auth') dataStore.sync();
+  if (document.visibilityState === 'visible' && dataStore.server && dataStore.status !== 'auth') { dataStore.sync(); scheduleBotSync(); }
 });
 window.addEventListener('beforeunload', e => { if (dataStore.dirty) e.preventDefault(); });
 
@@ -1574,6 +1647,7 @@ async function start() {
   await render();
   refreshReminders();
   scheduleCalendarSync(1000);
+  scheduleBotSync(1000);
   if (!started) setInterval(refreshReminders, 15 * 60 * 1000);
   started = true;
 }

@@ -433,6 +433,58 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
     return out;
   }
 
+  // ---------------------------------------------------------------- bot do Telegram
+
+  /** O que o bot precisa para entender as mensagens: categorias, contas, cartões e exemplos do usuário. */
+  function botContext() {
+    const names = (sql, args = []) => db.all(sql, args).map(r => r.name);
+    return {
+      last_id: getSettings().bot_last_id ?? 0,
+      categories: {
+        expense: names("SELECT name FROM categories WHERE kind = 'expense' AND archived = 0 ORDER BY name"),
+        income: names("SELECT name FROM categories WHERE kind = 'income' AND archived = 0 ORDER BY name"),
+      },
+      accounts: names('SELECT name FROM accounts WHERE archived = 0 ORDER BY id'),
+      cards: names('SELECT name FROM cards WHERE archived = 0 ORDER BY id'),
+      // como o usuário costuma categorizar (descrição -> categoria), dos lançamentos avulsos mais recentes
+      examples: db.all(`SELECT t.description, c.name AS category FROM transactions t JOIN categories c ON c.id = t.category_id
+                        WHERE t.recurrence_id IS NULL AND t.installment_group IS NULL
+                        GROUP BY UPPER(t.description) ORDER BY MAX(t.id) DESC LIMIT 60`),
+    };
+  }
+
+  /**
+   * Grava os lançamentos que o bot anotou (id crescente do Telegram; só os ainda não importados).
+   * Categoria, conta e cartão vêm pelo nome; sem conta/cartão, vai na primeira conta.
+   */
+  function botImport(entries) {
+    let last = getSettings().bot_last_id ?? 0;
+    const norm = v => String(v ?? '').trim().toLowerCase();
+    const cats = db.all('SELECT id, name, kind FROM categories WHERE archived = 0');
+    const accounts = db.all('SELECT id, name FROM accounts WHERE archived = 0 ORDER BY id');
+    const cards = db.all('SELECT id, name FROM cards WHERE archived = 0');
+    let created = 0;
+    for (const e of [...entries].sort((a, b) => a.id - b.id)) {
+      if (!(e.id > last)) continue;
+      last = e.id;
+      // inválido: pula (não pode travar a fila)
+      if (!Number.isInteger(e.amount) || e.amount <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(e.date ?? '')) continue;
+      const kind = e.kind === 'income' ? 'income' : 'expense';
+      const card = kind === 'expense' ? cards.find(c => norm(c.name) === norm(e.payment)) : null;
+      const account = accounts.find(a => norm(a.name) === norm(e.payment)) ?? accounts[0];
+      db.insert('transactions', txFields({
+        kind, description: String(e.description || '').trim() || 'Telegram', amount: e.amount, date: e.date,
+        category_id: cats.find(c => c.kind === kind && norm(c.name) === norm(e.category))?.id ?? null,
+        card_id: card?.id ?? null, account_id: card ? null : account?.id ?? null,
+        paid: !card && e.date <= today(), nature: kind === 'expense' ? 'daily' : null,
+        notes: e.text ? `Telegram: ${e.text}` : null,
+      }));
+      created++;
+    }
+    db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['bot_last_id', JSON.stringify(last)]);
+    return { created, last_id: last };
+  }
+
   // ---------------------------------------------------------------- rotas (main.py)
 
   const accountData = b => {
@@ -684,6 +736,8 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
     ['GET', '/daily', ({ q }) => dailyGrid(validMonth(q.start), Math.min(24, Math.max(1, +(q.months || 12))))],
     ['GET', '/reminders', () => reminders(today())],
     ['GET', '/upcoming', ({ q }) => reminders(today(), Math.min(120, Math.max(1, +(q.days || 60))))],
+    ['GET', '/bot/context', () => botContext()],
+    ['POST', '/bot/import', ({ body }) => botImport(body.entries || [])],
     ['GET', '/settings', () => getSettings()],
     ['PUT', '/settings', ({ body }) => {
       for (const [k, v] of Object.entries(body)) {

@@ -64,6 +64,21 @@ cria a agenda **Minhas Finanças**. `js/calendar.js` mantém um evento por conta
 `notify_hour`h N dias antes (antecedência da conta) e na véspera. IDs fixos (`fin` + hex da chave): sincronizar de novo não duplica; pago/excluído some.
 Atualiza ao abrir o site e ~3 s depois de cada alteração. Requer a Google Calendar API ativada no projeto.
 
+## Bot do Telegram
+
+Mande para um bot seu no Telegram coisas como "gastei 25,48 de uber" e ele anota um gasto diário de hoje na
+categoria Transporte. Funciona sem servidor:
+
+- O script `frontend/telegram-bot.gs` roda no Google Apps Script da sua conta. A cada minuto ele lê as
+  mensagens, entende com o Gemini e anota em `minhas-financas-telegram.json` no seu Drive.
+- Ao abrir, o app grava no banco o que chegou. Ele também publica categorias, contas, cartões e exemplos em
+  `minhas-financas-telegram-contexto.json`, que o script usa para entender as mensagens.
+- Cada arquivo tem um só escritor, então os dois lados não disputam o mesmo arquivo.
+
+Para configurar, ative em Ajustes › Telegram e siga os passos que aparecem lá: token do @BotFather, chave do
+Gemini, colar o script e executar `configurar`. O bot só atende o chat que estava ligado na configuração.
+"desfazer" remove a última anotação, enquanto o app ainda não a importou.
+
 ## Conceitos
 
 | Conceito | Como funciona |
