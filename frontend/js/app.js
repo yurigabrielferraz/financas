@@ -219,7 +219,12 @@ const parseSource = v => {
   const [t, id] = (v || '').split(':');
   return { account_id: t === 'a' ? +id : null, card_id: t === 'c' ? +id : null };
 };
-const defaultSource = () => (activeAccounts()[0] ? `a:${activeAccounts()[0].id}` : '');
+/** Pagamento padrão escolhido nos Ajustes (se ainda ativo); senão, a primeira conta. */
+function defaultSource() {
+  const d = state.settings.default_source;
+  if (d && (activeAccounts().some(a => d === `a:${a.id}`) || activeCards().some(c => d === `c:${c.id}`))) return d;
+  return activeAccounts()[0] ? `a:${activeAccounts()[0].id}` : '';
+}
 
 function accountOptions(selected) {
   return `<option value="">— sem conta —</option>` + activeAccounts()
@@ -1140,6 +1145,8 @@ async function Settings() {
             <span class="dot" style="background:${esc(a.color)}"></span>
             <div class="main-col"><div class="title">${esc(a.name)}</div><div class="meta">${ACCOUNT_TYPES[a.type] || ''}${a.archived ? ' · arquivada' : ''}</div></div>
             <div class="amount num ${a.balance < 0 ? 'neg' : ''}">${fmtMoney(a.balance)}</div></div>`).join('')}</div>
+          <label class="field" style="margin-top:12px"><span>Pagamento padrão dos novos lançamentos</span>
+            <select id="default-source">${sourceOptions(defaultSource())}</select></label>
         </section>
         <section class="panel">
           <div class="panel-head"><h2>Categorias</h2><button class="btn sm" id="cat-new">+ Nova</button></div>
@@ -1231,6 +1238,12 @@ async function Settings() {
     </div>`;
 
   $('#acc-new').onclick = () => accountForm();
+  $('#default-source').onchange = async e => {
+    try {
+      state.settings = await api.put('/settings', { default_source: e.target.value });
+      toast('Pagamento padrão salvo');
+    } catch (err) { toast(err.message, 'error'); }
+  };
   $('#restore-btn').onclick = () => $('#restore-file').click();
   $('#restore-file').onchange = e => {
     const file = e.target.files[0];

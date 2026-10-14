@@ -39,6 +39,20 @@ test('app: bot context and import', () => {
   assert.ok(h('GET', '/bot/context').examples.some(x => x.description === 'Uber' && x.category === 'Transporte'));
 });
 
+test('app: bot uses the default payment from settings', () => {
+  const srv = createServer(wrap(new SQL.Database()), sql('schema.sql'), sql('seed.sql'), () => '2026-10-12');
+  const h = (m, u, b) => srv.handle(m, u, b).body;
+  const mp = h('POST', '/accounts', { name: 'MercadoPago' });
+  h('PUT', '/settings', { default_source: `a:${mp.id}` });
+  h('POST', '/bot/import', { entries: [
+    { id: 1, kind: 'expense', description: 'Uber', amount: 2548, date: '2026-10-12', category: 'Transporte', payment: null },
+    { id: 2, kind: 'expense', description: 'Pão', amount: 900, date: '2026-10-12', category: null, payment: 'conta principal' },
+  ] });
+  const txs = h('GET', '/transactions?month=2026-10');
+  assert.equal(txs.find(t => t.description === 'Uber').account_id, mp.id);
+  assert.notEqual(txs.find(t => t.description === 'Pão').account_id, mp.id);
+});
+
 /** Roda o telegram-bot.gs num sandbox com os serviços do Apps Script simulados. */
 function appsScript({ updates, gemini }) {
   const props = { TELEGRAM_TOKEN: 't', GEMINI_KEY: 'g', CHAT_ID: '42', OFFSET: '0' };

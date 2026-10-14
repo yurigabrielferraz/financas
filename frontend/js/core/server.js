@@ -463,6 +463,10 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
     const cats = db.all('SELECT id, name, kind FROM categories WHERE archived = 0');
     const accounts = db.all('SELECT id, name FROM accounts WHERE archived = 0 ORDER BY id');
     const cards = db.all('SELECT id, name FROM cards WHERE archived = 0');
+    // sem conta/cartão na mensagem: o pagamento padrão dos Ajustes ("a:ID" ou "c:ID"), senão a primeira conta
+    const [defType, defId] = String(getSettings().default_source ?? '').split(':');
+    const defaultCard = defType === 'c' ? cards.find(c => c.id === +defId) : null;
+    const fallbackAccount = (defType === 'a' && accounts.find(a => a.id === +defId)) || accounts[0];
     let created = 0;
     for (const e of [...entries].sort((a, b) => a.id - b.id)) {
       if (!(e.id > last)) continue;
@@ -470,8 +474,9 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
       // inválido: pula (não pode travar a fila)
       if (!Number.isInteger(e.amount) || e.amount <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(e.date ?? '')) continue;
       const kind = e.kind === 'income' ? 'income' : 'expense';
-      const card = kind === 'expense' ? cards.find(c => norm(c.name) === norm(e.payment)) : null;
-      const account = accounts.find(a => norm(a.name) === norm(e.payment)) ?? accounts[0];
+      const named = accounts.some(a => norm(a.name) === norm(e.payment));
+      const card = kind !== 'expense' ? null : cards.find(c => norm(c.name) === norm(e.payment)) ?? (named ? null : defaultCard);
+      const account = accounts.find(a => norm(a.name) === norm(e.payment)) ?? fallbackAccount;
       db.insert('transactions', txFields({
         kind, description: String(e.description || '').trim() || 'Telegram', amount: e.amount, date: e.date,
         category_id: cats.find(c => c.kind === kind && norm(c.name) === norm(e.category))?.id ?? null,
