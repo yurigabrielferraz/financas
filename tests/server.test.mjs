@@ -92,6 +92,8 @@ test('card installments and invoice', () => {
   assert.equal(inv.status, 'aberta');
   assert.equal(inv.closing_date, '2026-10-28');
   assert.equal(inv.due_date, '2026-11-05');
+  const dec = c.get(`/api/cards/${card.id}/invoice?month=2026-12`).json();
+  assert.deepEqual(dec.items.map(t => [t.date, t.first_date]), [['2026-11-10', '2026-10-10']]);
 
   const paid = c.post(`/api/cards/${card.id}/invoice/2026-11/pay`, {}).json();
   assert.ok(paid.paid);

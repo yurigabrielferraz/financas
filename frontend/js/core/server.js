@@ -611,8 +611,15 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
       const t = today();
       const month = q.month ? validMonth(q.month) : D.invoiceMonthFor(t, card.closing_day, card.due_day);
       [-2, -1, 0].forEach(k => ensureMonth(D.shiftYm(month, k)));
+      // first_date: data da compra (1ª parcela), usada para agrupar parcelas por dia
+      const firstDate = tx => {
+        if (!tx.installment_group) return tx.date;
+        const f = db.get('SELECT date, installment_no FROM transactions WHERE installment_group = ? ORDER BY installment_no LIMIT 1', [tx.installment_group]);
+        return D.addMonths(f.date, 1 - f.installment_no);
+      };
       return { ...invoiceSummary(card, month, t),
-        items: db.all(`${TX_SELECT} WHERE t.card_id = ? AND t.invoice_month = ? ORDER BY t.date, t.id`, [id, month]).map(toDict) };
+        items: db.all(`${TX_SELECT} WHERE t.card_id = ? AND t.invoice_month = ? ORDER BY t.date, t.id`, [id, month])
+          .map(tx => ({ ...toDict(tx), first_date: firstDate(tx) })) };
     }],
     ['POST', '/cards/:id/invoice/:month/pay', ({ id, month, body }) => {
       const card = fetchRow('cards', id);

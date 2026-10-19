@@ -1059,6 +1059,30 @@ async function Cards(id) {
   $('#card-new').onclick = () => cardForm();
 }
 
+// Agrupa por dia (mais recente primeiro); parcelas entram no dia da 1ª parcela e recorrências num grupo próprio.
+function invoiceItemsHtml(items) {
+  const row = (t, i) => `<div class="row clickable" data-item="${i}">
+    ${catIcon(t.category_name, t.category_color)}
+    <div class="main-col"><div class="title">${esc(t.description)}</div>
+      <div class="meta">${fmtDate(t.date)} · ${esc(t.category_name || 'sem categoria')}
+        ${t.installment_total ? ` · <span class="tag">${t.installment_no}/${t.installment_total}</span>` : ''}
+        ${t.recurrence_id ? ' · <span class="tag primary">↻ recorrente</span>' : ''}</div></div>
+    <div class="amount num ${t.kind === 'income' ? 'pos' : ''}">${t.kind === 'income' ? '− ' : ''}${fmtMoney(t.amount)}</div>
+  </div>`;
+  const indexed = items.map((t, i) => ({ t, i, day: t.first_date || t.date }));
+  const byDay = indexed.filter(x => !x.t.recurrence_id)
+    .sort((a, b) => b.day.localeCompare(a.day) || b.t.date.localeCompare(a.t.date) || b.t.id - a.t.id);
+  const recurring = indexed.filter(x => x.t.recurrence_id);
+  let html = '';
+  let lastDay = null;
+  for (const { t, i, day } of byDay) {
+    if (day !== lastDay) { html += `<div class="day-group">${fmtDayHeader(day)}</div>`; lastDay = day; }
+    html += row(t, i);
+  }
+  if (recurring.length) html += `<div class="day-group">Recorrentes</div>${recurring.map(({ t, i }) => row(t, i)).join('')}`;
+  return html;
+}
+
 async function CardDetail(id) {
   const card = state.cards.find(c => c.id === id);
   if (!card) { view.innerHTML = '<div class="empty">Cartão não encontrado. <a href="#/cartoes">Voltar</a></div>'; return; }
@@ -1095,14 +1119,7 @@ async function CardDetail(id) {
     </div>
     <section class="panel" style="margin-top:16px">
       <h2>Lançamentos da fatura <span class="muted small">(${inv.items.length})</span></h2>
-      <div class="list">${inv.items.map((t, i) => `<div class="row clickable" data-item="${i}">
-        ${catIcon(t.category_name, t.category_color)}
-        <div class="main-col"><div class="title">${esc(t.description)}</div>
-          <div class="meta">${fmtDate(t.date)} · ${esc(t.category_name || 'sem categoria')}
-            ${t.installment_total ? ` · <span class="tag">${t.installment_no}/${t.installment_total}</span>` : ''}
-            ${t.recurrence_id ? ' · <span class="tag primary">↻ recorrente</span>' : ''}</div></div>
-        <div class="amount num ${t.kind === 'income' ? 'pos' : ''}">${t.kind === 'income' ? '− ' : ''}${fmtMoney(t.amount)}</div>
-      </div>`).join('') || '<div class="empty">Nenhuma compra nesta fatura</div>'}</div>
+      <div class="list">${invoiceItemsHtml(inv.items) || '<div class="empty">Nenhuma compra nesta fatura</div>'}</div>
     </section>`;
 
   $$('[data-inv]').forEach(b => b.onclick = () => { state.invoiceMonth[id] = shiftMonth(month, +b.dataset.inv); render(); });
