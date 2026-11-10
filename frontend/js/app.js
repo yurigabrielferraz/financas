@@ -17,6 +17,7 @@ const state = {
   accounts: [], categories: [], cards: [], settings: {},
   txFilters: { kind: '', status: '', category_id: '', q: '' },
   invoiceMonth: {},
+  accountMonth: {},
   txView: storage('txView', 'grid'),
   gridStart: currentMonth(),
   showPast: storage('showPast', false),
@@ -1203,6 +1204,109 @@ async function CardDetail(id) {
   $$('[data-item]').forEach(r => r.onclick = () => transactionForm({ ...inv.items[+r.dataset.item], card_id: id }));
 }
 
+// ======================================================================= contas correntes
+
+async function Accounts(id) {
+  if (id) return AccountDetail(+id);
+  view.innerHTML = `
+    <div class="page-head"><h1>Contas</h1><div style="display:flex;gap:8px">
+      ${activeAccounts().length > 1 ? '<button class="btn" id="acc-transfer"><span class="msym">swap_horiz</span>Transferir</button>' : ''}
+      <button class="btn primary" id="acc-new">+ Nova conta</button></div></div>
+    <div class="grid-3">${state.accounts.map(a => `<a class="panel card-tile" href="#/contas/${a.id}" style="${a.archived ? 'opacity:.55' : ''}">
+      <div class="stripe" style="background:${esc(a.color)}"></div>
+      <div class="panel-head"><h2>${esc(a.name)}</h2>${a.archived ? '<span class="tag">arquivada</span>' : ''}</div>
+      <div class="muted small">${ACCOUNT_TYPES[a.type] || ''}</div>
+      <div class="num ${a.balance < 0 ? 'neg' : ''}" style="font-size:1.5rem;font-weight:700;margin:2px 0 6px">${fmtMoney(a.balance)}</div>
+      <div class="muted small">saldo atual</div>
+    </a>`).join('')}</div>
+    <section class="panel" style="margin-top:16px;max-width:520px">
+      <label class="field"><span>Pagamento padrão dos novos lançamentos</span>
+        <select id="default-source">${sourceOptions(defaultSource())}</select></label>
+    </section>`;
+  $('#acc-new').onclick = () => accountForm();
+  $('#acc-transfer')?.addEventListener('click', () => transferForm());
+  $('#default-source').onchange = async e => {
+    try {
+      state.settings = await api.put('/settings', { default_source: e.target.value });
+      toast('Pagamento padrão salvo');
+    } catch (err) { toast(err.message, 'error'); }
+  };
+}
+
+async function AccountDetail(id) {
+  const month = state.accountMonth[id] || currentMonth();
+  const st = await api.get(`/accounts/${id}/statement?month=${month}`).catch(() => null);
+  if (!st) { view.innerHTML = '<div class="empty">Conta não encontrada. <a href="#/contas">Voltar</a></div>'; return; }
+  const a = st.account;
+  const items = [];
+  const row = it => {
+    items.push(it);
+    const i = items.length - 1;
+    const pos = it.signed > 0;
+    if (it.type === 'invoice') {
+      return `<div class="row clickable" data-st="${i}">${catIcon('Fatura', it.card_color)}
+        <div class="main-col"><div class="title">${esc(it.description)}</div><div class="meta">pagamento da fatura de ${monthLabel(it.month)}</div></div>
+        <div class="amount num">− ${fmtMoney(it.amount)}</div></div>`;
+    }
+    const meta = it.transfer_id ? 'transferência entre contas' : [
+      esc(it.category_name || 'sem categoria'),
+      it.recurrence_id ? `<span class="tag primary">↻ ${BILL_TYPES[it.bill_type] || 'fixa'}</span>` : '',
+      it.installment_total ? `<span class="tag">${it.installment_no}/${it.installment_total}</span>` : '',
+      !it.paid ? (it.kind === 'income' ? '<span class="tag pos">a receber</span>' : dueTag(it.date, false)) : '',
+    ].filter(Boolean).join(' · ');
+    return `<div class="row clickable" data-st="${i}">
+      ${it.transfer_id ? catIcon('⇄', 'var(--md-outline)') : catIcon(it.category_name, it.category_color)}
+      <div class="main-col"><div class="title">${esc(it.description)}</div><div class="meta">${!it.paid ? `${fmtDate(it.date)} · ` : ''}${meta}</div></div>
+      <div class="amount num ${pos ? 'pos' : ''}">${pos ? '+' : '−'} ${fmtMoney(it.amount)}</div></div>`;
+  };
+  const daysHtml = st.days.map(d => `<div class="day-group" style="display:flex;justify-content:space-between">
+      <span>${fmtDayHeader(d.date)}</span><span class="num">saldo ${fmtMoney(d.balance)}</span></div>${d.items.map(row).join('')}`).join('');
+  const pendingHtml = st.pending.map(row).join('');
+
+  view.innerHTML = `
+    <div class="page-head">
+      <div style="display:flex;align-items:center;gap:10px"><a href="#/contas" class="btn ghost sm">‹ Contas</a>
+        <h1><span class="dot" style="display:inline-block;background:${esc(a.color)};margin-right:8px"></span>${esc(a.name)}</h1></div>
+      <div style="display:flex;gap:8px;align-items:center">${monthNav(month, 'data-accm')}<button class="btn" id="acc-edit">Editar</button></div>
+    </div>
+    <div class="grid-2">
+      <section class="panel">
+        <div class="panel-head"><h2>Saldo atual</h2><span class="muted small">${ACCOUNT_TYPES[a.type] || ''}</span></div>
+        <div class="num ${a.balance < 0 ? 'neg' : ''}" style="font-size:2rem;font-weight:700;margin:4px 0">${fmtMoney(a.balance)}</div>
+        <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
+          <button class="btn primary" id="acc-add">+ Lançamento nesta conta</button>
+          ${activeAccounts().length > 1 ? '<button class="btn" id="acc-transfer"><span class="msym">swap_horiz</span>Transferir</button>' : ''}
+        </div>
+      </section>
+      <section class="panel">
+        <h2>${monthLabel(month)}</h2>
+        <div class="small" style="display:grid;grid-template-columns:1fr auto;gap:6px 16px;margin-top:8px">
+          <span class="muted">Saldo no início do mês</span><span class="num">${fmtMoney(st.opening)}</span>
+          <span class="muted">Entradas</span><span class="num pos">+ ${fmtMoney(st.income)}</span>
+          <span class="muted">Saídas</span><span class="num neg">− ${fmtMoney(st.expense)}</span>
+          <span class="muted">Saldo no fim do mês</span><b class="num">${fmtMoney(st.closing)}</b>
+        </div>
+        <p class="hint">Entradas e saídas não incluem transferências entre suas contas.</p>
+      </section>
+    </div>
+    <section class="panel" style="margin-top:16px">
+      <h2>Extrato</h2>
+      <div class="list">${daysHtml || '<div class="empty">Nada pago ou recebido neste mês</div>'}</div>
+    </section>
+    ${pendingHtml ? `<section class="panel" style="margin-top:16px"><h2>A pagar e a receber no mês</h2>
+      <p class="hint">Ainda não entram no saldo.</p><div class="list">${pendingHtml}</div></section>` : ''}`;
+
+  $$('[data-accm]').forEach(b => b.onclick = () => { state.accountMonth[id] = shiftMonth(month, +b.dataset.accm); render(); });
+  $('#acc-edit').onclick = () => accountForm(state.accounts.find(x => x.id === id));
+  $('#acc-add').onclick = () => transactionForm(null, { account_id: id });
+  $('#acc-transfer')?.addEventListener('click', () => transferForm());
+  $$('[data-st]').forEach(r => r.onclick = () => {
+    const it = items[+r.dataset.st];
+    if (it.type === 'invoice') { state.invoiceMonth[it.card_id] = it.month; location.hash = `#/cartoes/${it.card_id}`; }
+    else transactionForm(it);
+  });
+}
+
 async function Settings() {
   const s = state.settings;
   const notifSupported = 'Notification' in window;
@@ -1214,17 +1318,6 @@ async function Settings() {
     <div class="page-head"><h1>Ajustes</h1></div>
     <div class="grid-2">
       <div class="stack">
-        <section class="panel">
-          <div class="panel-head"><h2>Contas</h2><div style="display:flex;gap:8px">
-            ${activeAccounts().length > 1 ? '<button class="btn sm" id="acc-transfer"><span class="msym">swap_horiz</span>Transferir</button>' : ''}
-            <button class="btn sm" id="acc-new">+ Nova conta</button></div></div>
-          <div class="list">${state.accounts.map(a => `<div class="row clickable" data-acc="${a.id}" style="${a.archived ? 'opacity:.55' : ''}">
-            <span class="dot" style="background:${esc(a.color)}"></span>
-            <div class="main-col"><div class="title">${esc(a.name)}</div><div class="meta">${ACCOUNT_TYPES[a.type] || ''}${a.archived ? ' · arquivada' : ''}</div></div>
-            <div class="amount num ${a.balance < 0 ? 'neg' : ''}">${fmtMoney(a.balance)}</div></div>`).join('')}</div>
-          <label class="field" style="margin-top:12px"><span>Pagamento padrão dos novos lançamentos</span>
-            <select id="default-source">${sourceOptions(defaultSource())}</select></label>
-        </section>
         <section class="panel">
           <div class="panel-head"><h2>Categorias</h2><button class="btn sm" id="cat-new">+ Nova</button></div>
           <p class="muted small" style="margin:4px 0 8px">Despesas</p>
@@ -1314,14 +1407,6 @@ async function Settings() {
       </div>
     </div>`;
 
-  $('#acc-new').onclick = () => accountForm();
-  $('#acc-transfer')?.addEventListener('click', () => transferForm());
-  $('#default-source').onchange = async e => {
-    try {
-      state.settings = await api.put('/settings', { default_source: e.target.value });
-      toast('Pagamento padrão salvo');
-    } catch (err) { toast(err.message, 'error'); }
-  };
   $('#restore-btn').onclick = () => $('#restore-file').click();
   $('#restore-file').onchange = e => {
     const file = e.target.files[0];
@@ -1349,7 +1434,6 @@ async function Settings() {
       refresh();
     },
   });
-  $$('[data-acc]').forEach(el => el.onclick = () => accountForm(state.accounts.find(a => a.id === +el.dataset.acc)));
   $('#cat-new').onclick = () => categoryForm();
   $$('[data-cat]').forEach(el => el.onclick = () => categoryForm(catById(+el.dataset.cat)));
 
@@ -1604,7 +1688,7 @@ document.addEventListener('click', e => {
 
 // ======================================================================= router
 
-const routes = { dashboard: Dashboard, lancamentos: Transactions, fixas: Recurrences, cartoes: Cards, config: Settings };
+const routes = { dashboard: Dashboard, lancamentos: Transactions, fixas: Recurrences, contas: Accounts, cartoes: Cards, config: Settings };
 
 async function render() {
   const [name, ...params] = (location.hash.replace(/^#\/?/, '') || 'dashboard').split('/');
@@ -1621,7 +1705,7 @@ async function render() {
 
 $('#fab').onclick = () => {
   const [name, id] = location.hash.replace(/^#\/?/, '').split('/');
-  transactionForm(null, name === 'cartoes' && id ? { card_id: +id } : {});
+  transactionForm(null, name === 'cartoes' && id ? { card_id: +id } : name === 'contas' && id ? { account_id: +id } : {});
 };
 window.addEventListener('hashchange', () => { window.scrollTo(0, 0); render(); });
 document.addEventListener('keydown', e => {

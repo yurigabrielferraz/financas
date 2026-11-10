@@ -492,6 +492,49 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
     return { created, last_id: last };
   }
 
+  // ---------------------------------------------------------------- extrato da conta
+
+  /**
+   * Extrato do mês: o que já saiu/entrou (na data do pagamento) com o saldo após cada dia, mais o que
+   * ainda está a pagar/receber no mês (fora do saldo). Pagamentos de fatura entram como saída.
+   */
+  function accountStatement(id, month) {
+    const account = accountBalances().find(a => a.id === id);
+    if (!account) throw new HttpError(404, `accounts: id ${id} não encontrado`);
+    ensureMonth(month);
+    const [first, last] = D.monthBounds(month);
+    const eff = "CASE WHEN t.paid = 1 THEN COALESCE(t.paid_date, t.date) ELSE t.date END";
+    const opening = account.initial_balance
+      + db.scalar(`SELECT COALESCE(SUM(CASE WHEN kind = 'income' THEN amount ELSE -amount END), 0) FROM transactions t
+                   WHERE account_id = ? AND card_id IS NULL AND paid = 1 AND COALESCE(paid_date, date) < ?`, [id, first])
+      - db.scalar('SELECT COALESCE(SUM(amount), 0) FROM invoice_payments WHERE account_id = ? AND paid_date < ?', [id, first]);
+    const withDate = TX_SELECT.replace('SELECT t.id,', `SELECT ${eff} AS eff_date, t.id,`);
+    const txs = db.all(`SELECT * FROM (${withDate} WHERE t.account_id = ? AND t.card_id IS NULL) WHERE eff_date BETWEEN ? AND ?`, [id, first, last])
+      .map(r => ({ ...toDict(r), type: 'transaction', signed: r.kind === 'income' ? r.amount : -r.amount }));
+    const invoices = db.all(`SELECT ip.*, c.name AS card_name, c.color AS card_color FROM invoice_payments ip
+                             JOIN cards c ON c.id = ip.card_id WHERE ip.account_id = ? AND ip.paid_date BETWEEN ? AND ?`, [id, first, last])
+      .map(p => ({ type: 'invoice', card_id: p.card_id, month: p.month, description: `Fatura ${p.card_name}`, card_color: p.card_color,
+        amount: p.amount, signed: -p.amount, eff_date: p.paid_date, paid: true }));
+    const done = [...txs.filter(t => t.paid), ...invoices]
+      .sort((a, b) => a.eff_date.localeCompare(b.eff_date) || (a.id ?? 0) - (b.id ?? 0));
+    let balance = opening;
+    const days = [];
+    for (const it of done) {
+      balance += it.signed;
+      if (days[days.length - 1]?.date !== it.eff_date) days.push({ date: it.eff_date, items: [] });
+      const day = days[days.length - 1];
+      day.items.push(it);
+      day.balance = balance;
+    }
+    const sum = (list, sign) => list.filter(x => Math.sign(x.signed) === sign).reduce((a, x) => a + x.amount, 0);
+    return {
+      account: toDict(account), month, opening, closing: balance,
+      income: sum(done.filter(x => !x.transfer_id), 1), expense: sum(done.filter(x => !x.transfer_id), -1),
+      days: days.reverse(),
+      pending: txs.filter(t => !t.paid).sort((a, b) => a.date.localeCompare(b.date)),
+    };
+  }
+
   // ---------------------------------------------------------------- transferências entre contas
 
   /**
@@ -590,6 +633,7 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
   const routes = [
     // contas
     ['GET', '/accounts', () => accountBalances().map(toDict)],
+    ['GET', '/accounts/:id/statement', ({ id, q }) => accountStatement(id, validMonth(q.month))],
     ['POST', '/accounts', ({ body }) => toDict(fetchRow('accounts', db.insert('accounts', accountData(body))))],
     ['PUT', '/accounts/:id', ({ id, body }) => { fetchRow('accounts', id); db.update('accounts', id, accountData(body)); return toDict(fetchRow('accounts', id)); }],
     ['DELETE', '/accounts/:id', ({ id }) => {

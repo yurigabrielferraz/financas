@@ -304,3 +304,26 @@ test('transfer between accounts: moves balances, stays out of income/expense and
   assert.equal(c.delete(`/transactions/${leg.id}`).json().deleted, 2);
   assert.deepEqual(bal(), { [a.id]: 100000, [b.id]: 0 });
 });
+
+test('account statement: running balance by payment date, pending apart, invoice payments', () => {
+  const c = makeClient();
+  const a = c.get('/accounts').json()[0];
+  c.put(`/accounts/${a.id}`, { ...a, initial_balance: 100000 });
+  c.post('/transactions', { kind: 'expense', description: 'Set', amount: 1000, date: '2026-09-20', account_id: a.id, paid: true });
+  c.post('/transactions', { kind: 'income', description: 'Salário', amount: 50000, date: '2026-10-01', account_id: a.id, paid: true });
+  c.post('/transactions', { kind: 'expense', description: 'Uber', amount: 2000, date: '2026-10-03', account_id: a.id, paid: true });
+  c.post('/transactions', { kind: 'expense', description: 'Luz', amount: 9000, date: '2026-10-20', account_id: a.id, paid: false });
+  const card = c.post('/cards', { name: 'Itaú', closing_day: 30, due_day: 6 }).json();
+  c.post('/transactions', { kind: 'expense', description: 'Compra', amount: 3000, date: '2026-09-10', card_id: card.id });
+  c.post(`/cards/${card.id}/invoice/2026-10/pay`, { account_id: a.id, paid_date: '2026-10-04', amount: 3000 });
+
+  const st = c.get(`/accounts/${a.id}/statement?month=2026-10`).json();
+  assert.equal(st.opening, 99000);
+  assert.equal(st.closing, 99000 + 50000 - 2000 - 3000);
+  assert.equal(st.income, 50000);
+  assert.equal(st.expense, 5000);
+  assert.deepEqual(st.days.map(d => [d.date, d.balance]), [['2026-10-04', 144000], ['2026-10-03', 147000], ['2026-10-01', 149000]]);
+  assert.equal(st.days[0].items[0].type, 'invoice');
+  assert.deepEqual(st.pending.map(t => t.description), ['Luz']);
+  assert.equal(c.get('/accounts').json()[0].balance, st.closing);
+});
