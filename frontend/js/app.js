@@ -303,7 +303,6 @@ function transactionForm(tx = null, defaults = {}) {
       <div class="seg full">
         <label class="expense"><input type="radio" name="kind" value="expense" ${t.kind === 'expense' ? 'checked' : ''}>Despesa</label>
         <label class="income"><input type="radio" name="kind" value="income" ${t.kind === 'income' ? 'checked' : ''}>Receita</label>
-        ${isEdit ? '' : '<label><input type="radio" name="kind" value="transfer">Transferência</label>'}
       </div>
       <div class="field full"><span id="source-label">Conta / cartão</span>${sourceChips(src)}</div>
       <label class="field full"><span>Valor</span>
@@ -345,7 +344,6 @@ function transactionForm(tx = null, defaults = {}) {
           : '';
       };
       $$('[name=kind]', form).forEach(r => r.onchange = () => {
-        if (form.kind.value === 'transfer') return transferForm(null, { amount: parseMoney(form.amount.value) || null, date: form.date.value });
         form.category_id.innerHTML = categoryOptions(form.kind.value, null);
         form.nature.innerHTML = natureOptions(form.kind.value, form.kind.value === 'expense' ? 'daily' : '');
         sync();
@@ -415,8 +413,8 @@ function transactionForm(tx = null, defaults = {}) {
 }
 
 /** Transferência entre contas (ex.: pix de uma conta para outra): não conta como entrada nem saída. */
-async function transferForm(tid = null, defaults = {}) {
-  const t = tid ? await api.get(`/transfers/${tid}`) : { date: todayISO(), ...defaults };
+async function transferForm(tid = null) {
+  const t = tid ? await api.get(`/transfers/${tid}`) : { date: todayISO() };
   const accs = activeAccounts();
   const from = t.from_account_id ? `a:${t.from_account_id}` : defaultSource().startsWith('a:') ? defaultSource() : `a:${accs[0]?.id}`;
   const to = t.to_account_id ? `a:${t.to_account_id}` : `a:${accs.find(a => `a:${a.id}` !== from)?.id}`;
@@ -1217,7 +1215,9 @@ async function Settings() {
     <div class="grid-2">
       <div class="stack">
         <section class="panel">
-          <div class="panel-head"><h2>Contas</h2><button class="btn sm" id="acc-new">+ Nova conta</button></div>
+          <div class="panel-head"><h2>Contas</h2><div style="display:flex;gap:8px">
+            ${activeAccounts().length > 1 ? '<button class="btn sm" id="acc-transfer"><span class="msym">swap_horiz</span>Transferir</button>' : ''}
+            <button class="btn sm" id="acc-new">+ Nova conta</button></div></div>
           <div class="list">${state.accounts.map(a => `<div class="row clickable" data-acc="${a.id}" style="${a.archived ? 'opacity:.55' : ''}">
             <span class="dot" style="background:${esc(a.color)}"></span>
             <div class="main-col"><div class="title">${esc(a.name)}</div><div class="meta">${ACCOUNT_TYPES[a.type] || ''}${a.archived ? ' · arquivada' : ''}</div></div>
@@ -1315,6 +1315,7 @@ async function Settings() {
     </div>`;
 
   $('#acc-new').onclick = () => accountForm();
+  $('#acc-transfer')?.addEventListener('click', () => transferForm());
   $('#default-source').onchange = async e => {
     try {
       state.settings = await api.put('/settings', { default_source: e.target.value });
