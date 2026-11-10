@@ -220,7 +220,7 @@ test('failed mutation is rolled back', () => {
   assert.deepEqual(c.get('/api/transactions?month=2026-10').json(), []);
 });
 
-test('opens a database created by the Python backend (v1 -> v4)', () => {
+test('opens a database created by the Python backend (v1 -> v5)', () => {
   const sdb = new SQL.Database();
   const db = wrap(sdb);
   db.exec(schema.replace(/,\s*nature\s+TEXT/g, '')); // formato antigo, sem a coluna nature
@@ -228,7 +228,7 @@ test('opens a database created by the Python backend (v1 -> v4)', () => {
   db.exec('PRAGMA user_version = 1');
   checkBackup(db);
   upgrade(db, schema, seed, TODAY);
-  assert.equal(db.scalar('PRAGMA user_version'), 4);
+  assert.equal(db.scalar('PRAGMA user_version'), 5);
   assert.ok(db.all('PRAGMA table_info(recurrences)').some(c => c.name === 'due_shift'));
   assert.ok(db.all('PRAGMA table_info(transactions)').some(c => c.name === 'nature'));
   const c = makeClient(sdb);
@@ -279,4 +279,28 @@ test('edit installments: only this, this and following, all', () => {
   assert.deepEqual(amounts(), [95, 95, 95, 95]);
   // datas e faturas de cada parcela não mudam
   assert.deepEqual(txs.map(t => c.get(`/api/transactions/${t.id}`).json().invoice_month), ['2026-11', '2026-12', '2027-01', '2027-02']);
+});
+
+test('transfer between accounts: moves balances, stays out of income/expense and the grid', () => {
+  const c = makeClient();
+  const a = c.get('/accounts').json()[0];
+  const b = c.post('/accounts', { name: 'MercadoPago', initial_balance: 0 }).json();
+  c.put(`/accounts/${a.id}`, { ...a, initial_balance: 100000 });
+  const tr = c.post('/transfers', { from_account_id: a.id, to_account_id: b.id, amount: 30000, date: TODAY }).json();
+  const bal = () => Object.fromEntries(c.get('/accounts').json().map(x => [x.id, x.balance]));
+  assert.deepEqual(bal(), { [a.id]: 70000, [b.id]: 30000 });
+  const s = c.get('/summary?month=2026-10').json();
+  assert.equal(s.income.total, 0);
+  assert.equal(s.expense.total, 0);
+  assert.equal(s.accounts_balance, 100000);
+  const day = c.get('/daily?start=2026-10&months=1').json().months[0].days.find(d => d.date === TODAY);
+  assert.equal(day.bills + day.income, 0);
+
+  c.put(`/transfers/${tr.transfer_id}`, { from_account_id: b.id, to_account_id: a.id, amount: 5000, date: TODAY });
+  assert.deepEqual(bal(), { [a.id]: 105000, [b.id]: -5000 });
+  assert.equal(c.post('/transfers', { from_account_id: a.id, to_account_id: a.id, amount: 1, date: TODAY }).status, 422);
+
+  const leg = c.get('/transactions?month=2026-10').json().find(t => t.transfer_id === tr.transfer_id);
+  assert.equal(c.delete(`/transactions/${leg.id}`).json().deleted, 2);
+  assert.deepEqual(bal(), { [a.id]: 100000, [b.id]: 0 });
 });

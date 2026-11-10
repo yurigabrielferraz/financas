@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     reminder_days     INTEGER,
     notes             TEXT,
     nature            TEXT,
+    transfer_id       TEXT,                   -- transferência entre contas: os 2 lançamentos do par
     created_at        TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );

@@ -2,7 +2,7 @@
 // SQLite em memória (sql.js). Valores em centavos; datas AAAA-MM-DD; meses AAAA-MM.
 import * as D from './dates.js';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 export const DATA_TABLES = ['transactions', 'recurrence_skips', 'recurrences', 'invoice_payments', 'cards', 'categories', 'accounts'];
 const DEFAULT_SETTINGS = { reminder_days_default: 3, notify_hour: 8 };
 const BOOL_FIELDS = ['paid', 'archived', 'active'];
@@ -62,6 +62,7 @@ export function upgrade(db, schemaSql, seedSql, today) {
   addColumn('transactions', 'nature'); // v2
   addColumn('recurrences', 'nature'); // v2
   addColumn('recurrences', 'due_shift'); // v4
+  addColumn('transactions', 'transfer_id'); // v5
   if (version > 0 && version < 3) {
     db.run(`DELETE FROM transactions WHERE recurrence_id IS NOT NULL AND paid = 0
             AND card_id IS NULL AND recurrence_date >= ?`, [today]);
@@ -189,7 +190,7 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
   const TX_SELECT = `
     SELECT t.id, t.kind, t.description, t.amount, t.date, t.category_id, t.account_id, t.card_id,
            t.invoice_month, t.paid_date, t.recurrence_id, t.recurrence_date, t.installment_group,
-           t.installment_no, t.installment_total, t.reminder_days, t.notes, t.nature, t.created_at, t.updated_at,
+           t.installment_no, t.installment_total, t.reminder_days, t.notes, t.nature, t.transfer_id, t.created_at, t.updated_at,
            CASE WHEN t.card_id IS NOT NULL THEN EXISTS (
              SELECT 1 FROM invoice_payments ip WHERE ip.card_id = t.card_id AND ip.month = t.invoice_month)
            ELSE t.paid END AS paid,
@@ -213,7 +214,7 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
     const rng = D.monthBounds(month);
     const totals = { 'income:0': 0, 'income:1': 0, 'expense:0': 0, 'expense:1': 0 };
     for (const r of db.all(`SELECT kind, paid, SUM(amount) AS total FROM transactions
-                            WHERE card_id IS NULL AND date BETWEEN ? AND ? GROUP BY kind, paid`, rng)) {
+                            WHERE card_id IS NULL AND transfer_id IS NULL AND date BETWEEN ? AND ? GROUP BY kind, paid`, rng)) {
       totals[`${r.kind}:${r.paid}`] = r.total;
     }
     const invoices = db.all('SELECT * FROM cards ORDER BY name').map(c => invoiceSummary(c, month, t))
@@ -234,7 +235,7 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
         `SELECT c.id, COALESCE(c.name, 'Sem categoria') AS name, COALESCE(c.color, '#94a3b8') AS color,
                 SUM(t.amount) AS total
          FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
-         WHERE t.kind = 'expense' AND t.date BETWEEN ? AND ? GROUP BY c.id ORDER BY total DESC`, rng),
+         WHERE t.kind = 'expense' AND t.transfer_id IS NULL AND t.date BETWEEN ? AND ? GROUP BY c.id ORDER BY total DESC`, rng),
       invoices,
       pending: db.all(`${TX_SELECT} WHERE t.card_id IS NULL AND t.paid = 0 AND t.date BETWEEN ? AND ?
                        ORDER BY t.date, t.description`, rng).map(toDict),
@@ -313,8 +314,9 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
       if (due < first) opening -= amount;
       else if (due <= last) bucket(due).card += amount;
     }
+    // transferências entre contas não mudam o saldo total: ficam fora da grade
     for (const r of db.all(`SELECT kind, nature, amount, date FROM transactions
-                            WHERE card_id IS NULL AND date BETWEEN ? AND ?`, [first, last])) {
+                            WHERE card_id IS NULL AND transfer_id IS NULL AND date BETWEEN ? AND ?`, [first, last])) {
       let col = 'bills', sign = 1;
       if (r.kind === 'income') [col, sign] = r.nature === 'saving' ? ['savings', -1] : ['income', 1];
       else if (r.nature === 'daily') col = 'daily';
@@ -488,6 +490,31 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
     }
     db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['bot_last_id', JSON.stringify(last)]);
     return { created, last_id: last };
+  }
+
+  // ---------------------------------------------------------------- transferências entre contas
+
+  /**
+   * Transferência = par de lançamentos pagos ligados por transfer_id: saída na origem e entrada no destino.
+   * Mexe no saldo de cada conta, mas fica fora de entradas/saídas, categorias e da grade.
+   */
+  function transferData(b) {
+    require(b.amount > 0 && b.date, 'Informe valor e data');
+    require(b.from_account_id && b.to_account_id && b.from_account_id !== b.to_account_id, 'Escolha duas contas diferentes');
+    const from = fetchRow('accounts', b.from_account_id);
+    const to = fetchRow('accounts', b.to_account_id);
+    const common = { description: `Transferência ${from.name} → ${to.name}`, amount: b.amount, date: b.date,
+      paid: true, paid_date: b.date, notes: b.notes ?? null, category_id: null, card_id: null, nature: null };
+    return [{ ...common, kind: 'expense', account_id: from.id }, { ...common, kind: 'income', account_id: to.id }];
+  }
+
+  function transferOut(tid) {
+    const legs = db.all('SELECT * FROM transactions WHERE transfer_id = ? ORDER BY kind', [tid]);
+    const out = legs.find(l => l.kind === 'expense');
+    const inc = legs.find(l => l.kind === 'income');
+    if (!out || !inc) throw new HttpError(404, 'Transferência não encontrada');
+    return { transfer_id: tid, amount: out.amount, date: out.date, notes: out.notes,
+      from_account_id: out.account_id, to_account_id: inc.account_id };
   }
 
   // ---------------------------------------------------------------- rotas (main.py)
@@ -732,7 +759,8 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
       const tx = fetchRow('transactions', id);
       const scope = q.scope || 'one';
       let rows = [tx];
-      if (tx.installment_group && scope !== 'one') {
+      if (tx.transfer_id) rows = db.all('SELECT id, recurrence_id, recurrence_date FROM transactions WHERE transfer_id = ?', [tx.transfer_id]);
+      else if (tx.installment_group && scope !== 'one') {
         rows = scope === 'future'
           ? db.all('SELECT id, recurrence_id, recurrence_date FROM transactions WHERE installment_group = ? AND installment_no >= ?', [tx.installment_group, tx.installment_no])
           : db.all('SELECT id, recurrence_id, recurrence_date FROM transactions WHERE installment_group = ?', [tx.installment_group]);
@@ -748,6 +776,21 @@ export function createServer(db, schemaSql, seedSql, todayFn = defaultToday) {
     ['GET', '/daily', ({ q }) => dailyGrid(validMonth(q.start), Math.min(24, Math.max(1, +(q.months || 12))))],
     ['GET', '/reminders', () => reminders(today())],
     ['GET', '/upcoming', ({ q }) => reminders(today(), Math.min(120, Math.max(1, +(q.days || 60))))],
+    ['POST', '/transfers', ({ body }) => {
+      const tid = crypto.randomUUID().replaceAll('-', '');
+      for (const leg of transferData(body)) db.insert('transactions', { ...leg, transfer_id: tid });
+      return transferOut(tid);
+    }],
+    ['GET', '/transfers/:tid', ({ tid }) => transferOut(tid)],
+    ['PUT', '/transfers/:tid', ({ tid, body }) => {
+      transferOut(tid);
+      const now = new Date().toISOString().slice(0, 19);
+      for (const leg of transferData(body)) {
+        db.run('UPDATE transactions SET description = ?, amount = ?, date = ?, paid_date = ?, notes = ?, account_id = ?, updated_at = ? WHERE transfer_id = ? AND kind = ?',
+          [leg.description, leg.amount, leg.date, leg.paid_date, leg.notes, leg.account_id, now, tid, leg.kind]);
+      }
+      return transferOut(tid);
+    }],
     ['GET', '/bot/context', () => botContext()],
     ['POST', '/bot/import', ({ body }) => botImport(body.entries || [])],
     ['GET', '/settings', () => getSettings()],

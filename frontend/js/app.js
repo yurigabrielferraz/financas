@@ -215,6 +215,16 @@ function sourceOptions(selected, { cards = true } = {}) {
   if (cards && crds.length) html += `<optgroup label="Cartões de crédito">${crds.map(c => opt(`c:${c.id}`, `💳 ${c.name}`)).join('')}</optgroup>`;
   return html + opt('', '— sem conta —');
 }
+/** Conta/cartão como botões (um toque) em vez de menu. */
+function sourceChips(selected, { cards = true, name = 'source' } = {}) {
+  const accs = state.accounts.filter(a => !a.archived || selected === `a:${a.id}`);
+  const crds = cards ? state.cards.filter(c => !c.archived || selected === `c:${c.id}`) : [];
+  const chip = (v, label, icon) => `<label class="chip"><input type="radio" name="${name}" value="${v}" ${v === selected ? 'checked' : ''}>
+    <span class="msym">${icon}</span>${esc(label)}</label>`;
+  return `<div class="chips">${accs.map(a => chip(`a:${a.id}`, a.name, 'account_balance')).join('')}
+    ${crds.map(c => chip(`c:${c.id}`, c.name, 'credit_card')).join('')}
+    ${selected === '' ? chip('', 'Sem conta', 'block') : ''}</div>`;
+}
 const parseSource = v => {
   const [t, id] = (v || '').split(':');
   return { account_id: t === 'a' ? +id : null, card_id: t === 'c' ? +id : null };
@@ -277,6 +287,7 @@ function choose(title, text, options) {
 // ======================================================================= formulários
 
 function transactionForm(tx = null, defaults = {}) {
+  if (tx?.transfer_id) return transferForm(tx.transfer_id);
   const isEdit = !!tx;
   const t = tx || { kind: 'expense', date: todayISO(), nature: 'daily', ...defaults };
   const nature = t.nature ?? (isEdit && t.kind === 'expense' ? 'bill' : t.nature);
@@ -292,13 +303,14 @@ function transactionForm(tx = null, defaults = {}) {
       <div class="seg full">
         <label class="expense"><input type="radio" name="kind" value="expense" ${t.kind === 'expense' ? 'checked' : ''}>Despesa</label>
         <label class="income"><input type="radio" name="kind" value="income" ${t.kind === 'income' ? 'checked' : ''}>Receita</label>
+        ${isEdit ? '' : '<label><input type="radio" name="kind" value="transfer">Transferência</label>'}
       </div>
+      <div class="field full"><span id="source-label">Conta / cartão</span>${sourceChips(src)}</div>
       <label class="field full"><span>Valor</span>
         <input name="amount" class="amount-input" inputmode="decimal" placeholder="0,00" value="${centsToInput(t.amount)}" autofocus required></label>
       <label class="field full"><span>Descrição</span><input name="description" value="${esc(t.description)}" placeholder="Ex.: Padaria, Uber, Farmácia" required maxlength="120"></label>
       <label class="field"><span>Data</span><input type="date" name="date" value="${t.date}" required></label>
       <label class="field"><span>Categoria</span><select name="category_id">${categoryOptions(t.kind, t.category_id)}</select></label>
-      <label class="field"><span>Conta / cartão</span><select name="source">${sourceOptions(src)}</select></label>
       <label class="field" id="f-nature"><span>Classificação</span><select name="nature">${natureOptions(t.kind, nature)}</select></label>
       ${isEdit ? '' : `<label class="field" id="f-inst"><span>Parcelas</span><input type="number" name="installments" min="1" max="72" value="1"></label>
       <div class="full" id="f-amode" hidden>
@@ -323,6 +335,7 @@ function transactionForm(tx = null, defaults = {}) {
       const sync = () => {
         const kind = form.kind.value;
         const { card_id } = parseSource(form.source.value);
+        $('#source-label', form).textContent = kind === 'income' ? 'Recebido em' : 'Pago com';
         $('#paid-label', form).textContent = kind === 'income' ? 'Já recebi' : 'Já foi pago';
         $('#f-paid', form).hidden = !!card_id;
         $('#f-nature', form).hidden = !!card_id;
@@ -332,11 +345,12 @@ function transactionForm(tx = null, defaults = {}) {
           : '';
       };
       $$('[name=kind]', form).forEach(r => r.onchange = () => {
+        if (form.kind.value === 'transfer') return transferForm(null, { amount: parseMoney(form.amount.value) || null, date: form.date.value });
         form.category_id.innerHTML = categoryOptions(form.kind.value, null);
         form.nature.innerHTML = natureOptions(form.kind.value, form.kind.value === 'expense' ? 'daily' : '');
         sync();
       });
-      form.source.onchange = sync;
+      $$('[name=source]', form).forEach(r => r.onchange = sync);
       const syncInst = () => {
         if (isEdit) return;
         const n = Math.max(1, +form.installments.value || 1);
@@ -395,6 +409,45 @@ function transactionForm(tx = null, defaults = {}) {
         const created = await api.post('/transactions', payload);
         toast(created.length > 1 ? `${created.length} parcelas lançadas` : 'Lançamento salvo');
       }
+      refresh();
+    },
+  });
+}
+
+/** Transferência entre contas (ex.: pix de uma conta para outra): não conta como entrada nem saída. */
+async function transferForm(tid = null, defaults = {}) {
+  const t = tid ? await api.get(`/transfers/${tid}`) : { date: todayISO(), ...defaults };
+  const accs = activeAccounts();
+  const from = t.from_account_id ? `a:${t.from_account_id}` : defaultSource().startsWith('a:') ? defaultSource() : `a:${accs[0]?.id}`;
+  const to = t.to_account_id ? `a:${t.to_account_id}` : `a:${accs.find(a => `a:${a.id}` !== from)?.id}`;
+  openModal({
+    title: tid ? 'Editar transferência' : 'Transferência entre contas',
+    extraFoot: tid ? '<button type="button" class="btn danger left" id="tr-del">Excluir</button>' : '',
+    body: `<div class="form-grid">
+      <p class="hint full">Move dinheiro entre suas contas (ex.: pix para você mesmo). Muda o saldo de cada conta, mas não entra como receita nem despesa.</p>
+      <div class="field full"><span>De</span>${sourceChips(from, { cards: false, name: 'from' })}</div>
+      <div class="field full"><span>Para</span>${sourceChips(to, { cards: false, name: 'to' })}</div>
+      <label class="field full"><span>Valor</span>
+        <input name="amount" class="amount-input" inputmode="decimal" placeholder="0,00" value="${centsToInput(t.amount)}" autofocus required></label>
+      <label class="field"><span>Data</span><input type="date" name="date" value="${t.date}" required></label>
+      <label class="field"><span>Observações</span><input name="notes" value="${esc(t.notes)}" maxlength="200"></label>
+    </div>`,
+    onOpen(form) {
+      $('#tr-del', form)?.addEventListener('click', async () => {
+        if (!(await choose('Excluir transferência', 'Excluir esta transferência? O saldo das duas contas volta ao que era.', [{ label: 'Excluir', value: true, cls: 'danger' }]))) return;
+        const leg = (await api.get(`/transactions?month=${t.date.slice(0, 7)}`)).find(x => x.transfer_id === tid);
+        await api.del(`/transactions/${leg.id}`);
+        toast('Transferência excluída');
+        refresh();
+      });
+    },
+    async onSubmit(fd) {
+      const amount = parseMoney(fd.get('amount'));
+      if (!(amount > 0)) throw new Error('Informe um valor válido');
+      const payload = { from_account_id: parseSource(fd.get('from')).account_id, to_account_id: parseSource(fd.get('to')).account_id,
+        amount, date: fd.get('date'), notes: fd.get('notes') || null };
+      if (tid) await api.put(`/transfers/${tid}`, payload); else await api.post('/transfers', payload);
+      toast(tid ? 'Transferência atualizada' : 'Transferência registrada');
       refresh();
     },
   });
@@ -909,7 +962,7 @@ async function openCell(key, date) {
     return;
   }
 
-  const txs = (await api.get(`/transactions?month=${month}`)).filter(t => t.date === date && gridColOf(t) === key);
+  const txs = (await api.get(`/transactions?month=${month}`)).filter(t => t.date === date && !t.transfer_id && gridColOf(t) === key);
   const defaults = { date, ...col.defaults };
   if (!txs.length) return transactionForm(null, defaults);
   const total = txs.reduce((a, t) => a + (key === 'savings' && t.kind === 'income' ? -t.amount : t.amount), 0);
@@ -945,12 +998,13 @@ async function loadTxList() {
   if (f.status) params.set('status', f.status);
   if (f.category_id) params.set('category_id', f.category_id);
   if (f.q) params.set('q', f.q);
-  const txs = await api.get(`/transactions?${params}`);
+  // transferência: uma linha só (a saída), fora de entradas/saídas
+  const txs = (await api.get(`/transactions?${params}`)).filter(t => !(t.transfer_id && t.kind === 'income'));
   const list = $('#tx-list');
   if (!list) return;
 
-  const inc = txs.filter(t => t.kind === 'income').reduce((a, t) => a + t.amount, 0);
-  const exp = txs.filter(t => t.kind === 'expense').reduce((a, t) => a + t.amount, 0);
+  const inc = txs.filter(t => t.kind === 'income' && !t.transfer_id).reduce((a, t) => a + t.amount, 0);
+  const exp = txs.filter(t => t.kind === 'expense' && !t.transfer_id).reduce((a, t) => a + t.amount, 0);
   $('#tx-kpis').innerHTML = `
     <div class="panel kpi"><div class="label">Entradas</div><div class="value num pos">${fmtMoney(inc)}</div></div>
     <div class="panel kpi"><div class="label">Saídas</div><div class="value num neg">${fmtMoney(exp)}</div></div>
@@ -963,6 +1017,12 @@ async function loadTxList() {
   let html = '', lastDate = '';
   txs.forEach((t, i) => {
     if (t.date !== lastDate) { html += `<div class="day-group">${fmtDayHeader(t.date)}</div>`; lastDate = t.date; }
+    if (t.transfer_id) {
+      html += `<div class="row clickable" data-tx="${i}">${catIcon('⇄', 'var(--md-outline)')}
+        <div class="main-col"><div class="title">${esc(t.description)}</div><div class="meta">transferência entre contas</div></div>
+        <div class="amount num">${fmtMoney(t.amount)}</div></div>`;
+      return;
+    }
     const meta = [
       t.category_name ? esc(t.category_name) : '<span class="muted">sem categoria</span>',
       t.card_name ? `💳 ${esc(t.card_name)} · fatura ${monthShort(t.invoice_month)}` : esc(t.account_name || ''),
